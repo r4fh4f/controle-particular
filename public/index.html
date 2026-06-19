@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Controle de Ganhos Particulares · Radiologia</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="login" style="display:none">
+  <form id="login-form" class="login-card">
+    <div class="mark">R</div>
+    <h1>Controle de Ganhos Particulares</h1>
+    <p>Acesso restrito</p>
+    <input id="login-pw" type="password" placeholder="Senha" autocomplete="current-password" required>
+    <div id="login-err" class="login-err"></div>
+    <button type="submit" class="btn btn-primary">Entrar</button>
+  </form>
+</div>
+<div class="app" style="display:none">
+  <header class="topbar">
+    <div class="brand">
+      <div class="mark">R</div>
+      <div>
+        <h1>Controle de Ganhos Particulares</h1>
+        <p>radiologia · ultrassom &amp; mamografia · somente particular</p>
+      </div>
+    </div>
+    <nav class="seg" role="tablist" aria-label="Layout">
+      <button data-layout="planilha" role="tab"><span class="n">01</span>Planilha</button>
+      <button data-layout="painel" role="tab"><span class="n">02</span>Painel</button>
+      <button data-layout="lancamento" role="tab"><span class="n">03</span>Lançamento</button>
+    </nav>
+    <button class="btn btn-ghost" id="export-btn" title="Baixar planilha (CSV/Excel)">Exportar</button>
+    <button class="btn btn-ghost" id="logout-btn" title="Sair">Sair</button>
+  </header>
+  <main id="view"></main>
+</div>
+<span id="dl-mount"></span>
+<script src="app.js"></script>
+</body>
+</html>
