@@ -78,6 +78,25 @@ Se o EasyPanel emite o certificado, deixe "DNS only" até emitir; se a Cloudflar
 **Ao atualizar para esta versão:** o banco antigo é migrado automaticamente (nenhum dado se perde)
 e todos precisarão digitar a senha uma vez.
 
+## Meta conjunta (e-mail de comemoração)
+
+Quando a soma do bruto dos dois sites passa de `MARCO_VALOR` (padrão R$ 100.000), o site
+configurado para isso envia **um único** e-mail comemorativo. Em **Ajustes → Meta conjunta**
+aparecem o progresso e o botão "Enviar e-mail de teste".
+
+| Variável | Onde | Valor |
+|----------|------|-------|
+| `MARCO_TOKEN` | nos dois sites | a mesma chave longa e aleatória nos dois |
+| `MARCO_PARCEIRO_URL` | nos dois sites | o endereço do **outro** site (`https://fernanda.hafner.work` / `https://rafael.hafner.work`) |
+| `MARCO_EMAIL_PARA` | só no site que envia | e-mail de destino |
+| `SMTP_USER` | só no site que envia | o Gmail que envia |
+| `SMTP_PASS` | só no site que envia | **senha de app** do Gmail (myaccount.google.com/apppasswords; exige verificação em duas etapas) |
+| `MARCO_VALOR` | opcional | padrão `100000` |
+
+O site verifica a cada lançamento e de hora em hora (para pegar lançamentos feitos no outro site).
+Se o outro site não responder, ele espera e tenta de novo; nunca envia com a soma incompleta.
+Para uma nova meta depois (ex.: 200 mil), basta mudar `MARCO_VALOR`.
+
 ## Backup
 
 - Automático: uma cópia por dia em `/app/data/backups/` (mantém as últimas 30).

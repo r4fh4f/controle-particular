@@ -245,6 +245,17 @@ body.sheet-open #app{transform:scale(.985);filter:brightness(.42) saturate(.6)}
 .row-end{display:flex;align-items:center;gap:12px;justify-content:flex-end}
 .btns{display:flex;gap:8px;flex-wrap:wrap}
 .badge{font-family:var(--data);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--caliper);border:1px solid color-mix(in oklab,var(--caliper) 45%,transparent);border-radius:5px;padding:1px 6px}
+.marco-top{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.marco-v{font-family:var(--data);font-variation-settings:"wdth" 85;font-size:26px;font-weight:600;color:var(--fg);letter-spacing:-.02em}
+.marco-pct{font-family:var(--data);font-size:13px;color:var(--caliper)}
+.marco-bar{height:8px;border-radius:4px;background:var(--line);overflow:hidden}
+.marco-bar div{height:100%;width:0;border-radius:4px;background:linear-gradient(90deg,color-mix(in oklab,var(--caliper) 55%,#000),var(--caliper));transition:width 1.1s var(--ease-out)}
+.marco-partes{display:flex;gap:22px;flex-wrap:wrap;font-size:13px}
+.marco-partes b{font-family:var(--data);font-weight:500;color:var(--fg)}
+.marco-status{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+.marco-status li{font-size:13px}
+.marco-status .ok{color:var(--up)}
+.marco-status .warn{color:var(--caliper)}
 .trash .r{grid-template-columns:96px minmax(0,1.5fr) minmax(0,1fr) 108px 100px}
 
 /* ============ FOLHA DE LANÇAMENTO ============ */
