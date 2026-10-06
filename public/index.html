@@ -3,42 +3,48 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Controle de Ganhos Particulares · Radiologia</title>
+<title>Controle de Ganhos</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="theme.css">
 </head>
 <body>
-<div id="login" style="display:none">
+<div id="login" hidden>
   <form id="login-form" class="login-card">
-    <div class="mark">R</div>
-    <h1>Controle de Ganhos Particulares</h1>
+    <div class="mark" data-inicial></div>
+    <h1 data-nome></h1>
     <p>Acesso restrito</p>
     <input id="login-pw" type="password" placeholder="Senha" autocomplete="current-password" required>
-    <div id="login-err" class="login-err"></div>
+    <div id="login-err" class="login-err" role="alert"></div>
     <button type="submit" class="btn btn-primary">Entrar</button>
   </form>
 </div>
-<div class="app" style="display:none">
+
+<div class="app" hidden>
   <header class="topbar">
-    <div class="brand">
-      <div class="mark">R</div>
+    <a class="brand" href="#/lancar">
+      <div class="mark" data-inicial></div>
       <div>
-        <h1>Controle de Ganhos Particulares</h1>
-        <p>radiologia · ultrassom &amp; mamografia · somente particular</p>
+        <h1 data-nome></h1>
+        <p>radiologia · ultrassom &amp; mamografia · particular</p>
       </div>
-    </div>
-    <nav class="seg" role="tablist" aria-label="Layout">
-      <button data-layout="planilha" role="tab"><span class="n">01</span>Planilha</button>
-      <button data-layout="painel" role="tab"><span class="n">02</span>Painel</button>
-      <button data-layout="lancamento" role="tab"><span class="n">03</span>Lançamento</button>
+    </a>
+    <nav class="seg" aria-label="Seções">
+      <a href="#/lancar" data-nav="lancar">Lançar</a>
+      <a href="#/mes" data-nav="mes">Mês</a>
+      <a href="#/ano" data-nav="ano">Ano</a>
+      <a href="#/ajustes" data-nav="ajustes">Ajustes</a>
     </nav>
-    <button class="btn btn-ghost" id="export-btn" title="Baixar planilha (CSV/Excel)">Exportar</button>
     <button class="btn btn-ghost" id="logout-btn" title="Sair">Sair</button>
   </header>
   <main id="view"></main>
 </div>
+
+<dialog id="edit-dlg"></dialog>
+<div id="toast" role="status" aria-live="polite"></div>
+<div id="tip" hidden></div>
 <span id="dl-mount"></span>
 <script src="app.js"></script>
 </body>
