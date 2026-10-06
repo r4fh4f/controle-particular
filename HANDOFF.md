@@ -15,21 +15,29 @@ Existem **dois sites com o mesmo código**, cada um com seu banco e sua senha:
 ## Mantendo os dois sites iguais
 
 O código é **idêntico** nos dois repositórios. A única diferença é o arquivo
-`site.config.json` (nome, letra do logo e cores):
+`site.config.json` (dono, cores):
 
 ```json
-{ "nome": "...", "inicial": "R", "accent": [0.88, 0.20, 128], "accent2": [0.80, 0.13, 248] }
+{ "nome": "...", "dono": "Rafael", "inicial": "R", "accent": [0.82, 0.14, 75], "accent2": [0.68, 0.16, 255] }
 ```
 
-`accent` é a cor principal (ultrassom, botões) e `accent2` a cor da mamografia, em OKLCH
-(luminosidade, croma, matiz). Ao mudar algo, aplique a mesma mudança nos dois repositórios
+`accent` é a cor de destaque do site (calipers, cursor, mês aberto) e `accent2` a da etiqueta de
+mamografia, em OKLCH (luminosidade, croma, matiz). Ao mudar algo, aplique a mesma mudança nos dois repositórios
 e **não copie o `site.config.json`** de um para o outro.
+
+## Visual
+
+Tema "Sonda": o painel é desenhado como um console de ultrassom, sempre escuro.
+O mês aparece como um **setor de varredura** (cada linha = um dia, profundidade = ganho bruto,
+marcador de foco = média por dia trabalhado) e o ano como um **espectro Doppler**
+(ano atual acima da linha de base, ano anterior espelhado abaixo).
 
 ## Telas
 
-- **Lançar** — um atendimento por vez: data, médico, um ou mais exames, forma de pagamento.
-  O valor do exame é preenchido com o último valor cobrado. `Enter` avança de campo,
-  `Ctrl+Enter` salva. Toda inclusão/exclusão tem **Desfazer**.
+- **Lançar** (`N`, de qualquer tela) — folha com data, um ou mais exames (`Alt` `+` adiciona),
+  médico e pagamento (`1`–`5` ou setas). O valor do exame vem do último valor cobrado. `Enter`
+  avança de campo, `Ctrl+Enter` salva. Inclusão, edição e exclusão têm **Desfazer**.
+  Na worklist: `J`/`K` navegam, `Enter` edita, `Del` exclui, `/` busca.
 - **Mês** — navegação ‹ › (ou setas do teclado) por qualquer mês; bruto, líquido, exames,
   atendimentos e ticket médio com comparação ao mês anterior (no mês corrente, até o mesmo dia);
   gráfico por dia, formas de pagamento, US × MG, rankings de exames e médicos (clique filtra a lista),

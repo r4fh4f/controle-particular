@@ -1,6 +1,7 @@
 {
   "nome": "Controle de Ganhos Particulares",
+  "dono": "Rafael",
   "inicial": "R",
-  "accent": [0.88, 0.20, 128],
-  "accent2": [0.80, 0.13, 248]
+  "accent": [0.82, 0.14, 75],
+  "accent2": [0.68, 0.16, 255]
 }

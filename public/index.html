@@ -2,50 +2,194 @@
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#050607">
 <title>Controle de Ganhos</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Martian+Mono:wdth,wght@75..112.5,200..700&family=Schibsted+Grotesk:wght@400..800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css">
 <link rel="stylesheet" href="theme.css">
 </head>
 <body>
+
+<!-- ============ LOGIN ============ -->
 <div id="login" hidden>
-  <form id="login-form" class="login-card">
-    <div class="mark" data-inicial></div>
-    <h1 data-nome></h1>
-    <p>Acesso restrito</p>
-    <input id="login-pw" type="password" placeholder="Senha" autocomplete="current-password" required>
-    <div id="login-err" class="login-err" role="alert"></div>
-    <button type="submit" class="btn btn-primary">Entrar</button>
+  <canvas id="login-fan" aria-hidden="true"></canvas>
+  <form id="login-form" class="login" novalidate>
+    <svg class="probe" viewBox="0 0 26 22" aria-hidden="true"><path d="M13 2 L2.5 20 A 14 14 0 0 0 23.5 20 Z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M8 20.6 L13 5.5 M13 5.5 L18 20.6 M13 5.5 V21.5" stroke="currentColor" stroke-width=".9" opacity=".5"/></svg>
+    <h1 data-dono></h1>
+    <p class="eyebrow">Controle de ganhos particulares</p>
+    <div class="login-field">
+      <input id="login-pw" type="password" placeholder="Senha" autocomplete="current-password" aria-label="Senha" required>
+      <button type="submit" class="login-go press" aria-label="Entrar"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 8h9M8.5 4.5 12 8l-3.5 3.5"/></svg></button>
+    </div>
+    <p id="login-err" class="login-err" role="alert"></p>
   </form>
 </div>
 
-<div class="app" hidden>
-  <header class="topbar">
-    <a class="brand" href="#/lancar">
-      <div class="mark" data-inicial></div>
-      <div>
-        <h1 data-nome></h1>
-        <p>radiologia · ultrassom &amp; mamografia · particular</p>
-      </div>
+<!-- ============ APP ============ -->
+<div id="app" hidden>
+  <header class="top">
+    <a class="mark" href="#/mes">
+      <svg viewBox="0 0 26 22" aria-hidden="true"><path d="M13 2 L2.5 20 A 14 14 0 0 0 23.5 20 Z" fill="none" stroke="var(--caliper)" stroke-width="1.5" stroke-linejoin="round"/><path d="M8 20.6 L13 5.5 M13 5.5 L18 20.6 M13 5.5 V21.5" stroke="var(--caliper)" stroke-width="1" opacity=".5"/></svg>
+      <span><b data-dono></b><span class="full"> · US · MG · particular</span></span>
     </a>
-    <nav class="seg" aria-label="Seções">
-      <a href="#/lancar" data-nav="lancar">Lançar</a>
-      <a href="#/mes" data-nav="mes">Mês</a>
-      <a href="#/ano" data-nav="ano">Ano</a>
-      <a href="#/ajustes" data-nav="ajustes">Ajustes</a>
+    <nav class="tabs" role="tablist" aria-label="Seções">
+      <a role="tab" href="#/mes" data-tab="mes" class="press">Mês</a>
+      <a role="tab" href="#/ano" data-tab="ano" class="press">Ano</a>
+      <a role="tab" href="#/ajustes" data-tab="ajustes" class="press">Ajustes<i class="dot" id="aj-dot" hidden></i></a>
+      <span class="ind" aria-hidden="true"></span>
     </nav>
-    <button class="btn btn-ghost" id="logout-btn" title="Sair">Sair</button>
+    <span class="sp"></span>
+    <span class="clock" id="clock" aria-hidden="true"></span>
+    <button class="btn-launch press" id="open-sheet">Lançar <kbd>N</kbd></button>
   </header>
-  <main id="view"></main>
+
+  <!-- MÊS -->
+  <section id="v-mes" hidden>
+    <div class="monthbar">
+      <div class="mtitle">
+        <button class="navb press" id="prev" data-tip="Mês anterior" data-kbd="←" aria-label="Mês anterior">‹</button>
+        <h1 id="mtitle" aria-live="polite"></h1>
+        <button class="navb press" id="next" data-tip="Próximo mês" data-kbd="→" aria-label="Próximo mês">›</button>
+      </div>
+      <div class="cine" id="cine" role="group" aria-label="Meses"></div>
+    </div>
+
+    <div class="scan">
+      <div class="screen">
+        <canvas id="fan" aria-label="Setor de varredura: ganho bruto por dia do mês"></canvas>
+        <div class="ann tl" id="ann-tl"></div>
+        <div class="ann tr" id="ann-tr"></div>
+        <div class="ann bl" id="ann-bl"></div>
+        <div class="screen-empty" id="fan-empty" hidden><b>Sem exames neste mês</b><span>Pressione <kbd>N</kbd> para lançar</span></div>
+      </div>
+      <aside class="report">
+        <div>
+          <div class="eyebrow">Líquido no mês</div>
+          <div class="hero"><span class="cur">R$</span><span class="big roll" id="hero"></span><span class="cents roll" id="cents"></span></div>
+          <div class="herosub" id="herosub"></div>
+        </div>
+        <div class="meas" id="meas"></div>
+        <div class="mix"><div class="eyebrow">Formas de pagamento</div><div class="lst" id="mix"></div></div>
+      </aside>
+    </div>
+
+    <div class="spectrum">
+      <div class="hd"><span class="eyebrow" id="spec-title"></span>
+        <span class="lg"><span><i></i><span id="lg-y"></span></span><span><i class="p"></i><span id="lg-p"></span></span></span></div>
+      <canvas id="dop" aria-label="Ganho bruto por mês: este ano acima da linha de base, ano anterior abaixo"></canvas>
+    </div>
+
+    <div class="lower">
+      <div class="card">
+        <div class="ch">
+          <h2>Worklist do mês</h2>
+          <label class="search"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="7" cy="7" r="5"/><path d="M11 11l3.5 3.5"/></svg>
+            <input id="q" placeholder="Buscar exame ou médico" autocomplete="off" aria-label="Buscar exame ou médico"><kbd>/</kbd></label>
+          <span id="chips" class="chips"></span>
+          <a class="ghostbtn press" id="exp-mes" data-tip="Baixar planilha do mês (Excel)">CSV</a>
+        </div>
+        <div class="wl" id="wl" role="list"></div>
+        <div class="wl-foot" id="wl-foot"></div>
+      </div>
+      <div class="card">
+        <div class="ch"><h2>Mais frequentes</h2>
+          <div class="seg" id="rk-seg" role="group" aria-label="Ranking"><button aria-pressed="true" data-k="exame">Exames</button><button aria-pressed="false" data-k="medico">Solicitantes</button><span class="ind"></span></div></div>
+        <div class="tgc" id="rk"></div>
+      </div>
+    </div>
+    <div class="hint" aria-hidden="true"><span><kbd>N</kbd>lançar</span><span><kbd>←</kbd><kbd>→</kbd>mês</span><span><kbd>/</kbd>buscar</span><span><kbd>J</kbd><kbd>K</kbd>navegar na lista</span><span><kbd>↵</kbd>editar</span><span><kbd>Del</kbd>excluir</span></div>
+  </section>
+
+  <!-- ANO -->
+  <section id="v-ano" hidden>
+    <div class="monthbar"><div class="mtitle">
+      <button class="navb press" id="yprev" data-tip="Ano anterior" data-kbd="←" aria-label="Ano anterior">‹</button><h1 id="ytitle" aria-live="polite"></h1><button class="navb press" id="ynext" data-tip="Próximo ano" data-kbd="→" aria-label="Próximo ano">›</button></div>
+      <span class="sp"></span><a class="ghostbtn press" id="exp-ano">Exportar ano (CSV)</a></div>
+    <div class="ykpis" id="ykpis"></div>
+    <div class="spectrum">
+      <div class="hd"><span class="eyebrow">Espectro do ano · clique num mês para abrir</span>
+        <span class="lg"><span><i></i><span id="lg-y2"></span></span><span><i class="p"></i><span id="lg-p2"></span></span></span></div>
+      <canvas id="dop2" class="tall"></canvas>
+    </div>
+    <div class="lower">
+      <div class="card tblwrap"><table class="ytable" id="ytable"></table></div>
+      <div class="card tblwrap"><table class="ytable" id="yall"></table></div>
+    </div>
+  </section>
+
+  <!-- AJUSTES -->
+  <section id="v-ajustes" hidden>
+    <div class="settings">
+      <form class="card" id="taxas-form" novalidate>
+        <div class="ch"><h2>Taxas da maquininha</h2><span class="badge" id="taxas-badge" hidden>confira</span></div>
+        <div class="bd">
+          <div class="taxgrid" id="taxgrid"></div>
+          <p class="dim">Dinheiro e PIX entram 100% líquidos. Cada lançamento guarda a taxa do dia em que foi feito; mudar aqui vale para os próximos.</p>
+          <div class="row-end"><span class="ferr" id="taxas-err" role="alert"></span><button class="btn-solid press" type="submit" id="taxas-save">Salvar taxas</button></div>
+        </div>
+      </form>
+      <div class="card">
+        <div class="ch"><h2>Backup e exportação</h2></div>
+        <div class="bd">
+          <p id="backup-status" class="dim">Verificando…</p>
+          <div class="btns">
+            <a class="ghostbtn press" href="/api/backup" download>Baixar cópia do banco (.db)</a>
+            <a class="ghostbtn press" href="/api/export.csv?nome=ganhos-todos" download>Exportar tudo (CSV)</a>
+          </div>
+          <p class="dim">O servidor guarda uma cópia por dia (últimas 30), no mesmo VPS. Uma vez por mês, baixe a cópia do banco e guarde fora.</p>
+        </div>
+      </div>
+      <div class="card">
+        <div class="ch"><h2>Sessão</h2></div>
+        <div class="bd">
+          <div class="btns">
+            <button class="ghostbtn press" id="logout">Sair</button>
+            <button class="ghostbtn danger press" id="logout-all">Sair de todos os dispositivos</button>
+          </div>
+          <p class="dim" id="logout-all-note">Use se esqueceu o site aberto em outro computador. Todos precisarão da senha de novo.</p>
+        </div>
+      </div>
+      <div class="card span2">
+        <div class="ch"><h2>Lixeira</h2><span class="dim">exclusões ficam 90 dias</span></div>
+        <div id="trash"><div class="empty">Carregando…</div></div>
+      </div>
+    </div>
+  </section>
 </div>
 
-<dialog id="edit-dlg"></dialog>
-<div id="toast" role="status" aria-live="polite"></div>
-<div id="tip" hidden></div>
-<span id="dl-mount"></span>
+<!-- ============ FOLHA DE LANÇAMENTO / EDIÇÃO ============ -->
+<div class="overlay" id="ov" hidden>
+  <form class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-t" novalidate autocomplete="off">
+    <div class="grab" aria-hidden="true"></div>
+    <div class="sh"><h3 id="sheet-t">Novo atendimento</h3>
+      <label class="datef"><span class="eyebrow">Data</span><input type="date" id="f-data" aria-label="Data"></label>
+      <kbd class="esc">Esc</kbd></div>
+    <div class="sb">
+      <div><span class="fl-lab" id="ex-lab">Exames</span><div id="f-rows"></div>
+        <button type="button" class="addex press" id="f-add">+ Outro exame no mesmo atendimento <kbd>Alt</kbd><kbd>+</kbd></button></div>
+      <div><label class="fl-lab" for="f-med">Médico solicitante</label><div class="cb"><input class="inp" id="f-med" placeholder="Nome do médico" role="combobox" aria-expanded="false" aria-autocomplete="list"></div></div>
+      <div><span class="fl-lab" id="pay-l">Pagamento <span class="dim">· ← → ou 1–5</span></span>
+        <div class="pay" id="pay" role="radiogroup" aria-labelledby="pay-l"></div>
+        <div class="taxa" id="taxa"></div></div>
+      <div class="ferr" id="ferr" role="alert"></div>
+    </div>
+    <div class="sf">
+      <button type="button" class="ghostbtn danger press" id="f-del" hidden>Excluir</button>
+      <div class="tot"><span class="eyebrow k">Bruto</span><span class="vv" id="t-bruto">R$ 0,00</span></div>
+      <div class="tot"><span class="eyebrow k">Taxa</span><span class="vv dim" id="t-taxa">—</span></div>
+      <div class="tot liq"><span class="eyebrow k">Líquido</span><span class="vv roll" id="t-liq"></span></div>
+      <button type="submit" class="save press" id="f-save">Salvar <kbd>Ctrl ↵</kbd></button>
+    </div>
+  </form>
+</div>
+
+<div id="tip" role="tooltip"></div>
+<ol id="toasts" aria-live="polite"></ol>
+<span id="dl-mount" hidden></span>
 <script src="app.js"></script>
 </body>
 </html>

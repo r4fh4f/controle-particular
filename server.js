@@ -29,7 +29,7 @@ if (PASSWORD.length < 10) console.warn('AVISO: APP_PASSWORD tem menos de 10 cara
 
 // Identidade visual do site (único arquivo que difere entre as cópias)
 const SITE = Object.assign(
-  { nome: 'Controle de Ganhos Particulares', inicial: 'R', accent: [0.88, 0.20, 128], accent2: [0.80, 0.13, 248] },
+  { nome: 'Controle de Ganhos Particulares', dono: '', inicial: 'R', accent: [0.82, 0.14, 75], accent2: [0.68, 0.16, 255] },
   JSON.parse(fs.readFileSync(path.join(__dirname, 'site.config.json'), 'utf8'))
 );
 
@@ -175,18 +175,12 @@ app.post('/api/logout-all', auth, (req, res) => {
   res.json({ ok: true });
 });
 app.get('/api/me', (req, res) => res.json({ auth: !!sessionOf(req) }));
-app.get('/api/config', (req, res) => res.json({ nome: SITE.nome, inicial: SITE.inicial }));
+app.get('/api/config', (req, res) => res.json({ nome: SITE.nome, dono: SITE.dono, inicial: SITE.inicial }));
 
-// tema por site (cor de destaque vem do site.config.json)
+// tema por site: cor do caliper (destaque) e da mamografia vêm do site.config.json
 app.get('/theme.css', (req, res) => {
   const [l, c, h] = SITE.accent, [l2, c2, h2] = SITE.accent2;
-  res.type('text/css').send(`:root{
-  --accent:oklch(${l} ${c} ${h});
-  --accent-hover:oklch(${Math.min(0.96, l + 0.05)} ${c} ${h});
-  --accent-ink:oklch(0.22 0.07 ${h});
-  --accent-2:oklch(${l2} ${c2} ${h2});
-  --accent-2-ink:oklch(0.22 0.05 ${h2});
-}`);
+  res.type('text/css').send(`:root{--caliper:oklch(${l} ${c} ${h});--mg:oklch(${l2} ${c2} ${h2})}`);
 });
 
 /* ---------- helpers ---------- */
