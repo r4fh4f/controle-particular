@@ -518,7 +518,33 @@ function renderAjustes() {
   $('#taxas-badge').hidden = settings.taxasConferidas;
   loadAjustesExtras();
 }
+async function loadMarco() {
+  let m;
+  try { m = await api('GET', '/api/marco'); } catch (e) { $('#marco-status').innerHTML = `<li class="warn">Não foi possível calcular a meta.</li>`; return; }
+  const pct = Math.min(100, m.total / m.valor * 100);
+  $('#marco-sub').textContent = `soma dos dois sites · meta ${brl(m.valor)}`;
+  $('#marco-total').textContent = brl(m.total); $('#marco-de').textContent = `de ${brl(m.valor)}`;
+  $('#marco-pct').textContent = N1.format(pct) + '%';
+  requestAnimationFrame(() => { $('#marco-fill').style.width = pct + '%'; });
+  $('#marco-partes').innerHTML = m.partes.map(p => `<span>${esc(p.dono)} <b>${brl(p.bruto)}</b> <span class="dim">· ${N0.format(p.exames)} exames</span></span>`).join('');
+  const st = [];
+  if (m.enviado) st.push(`<li class="ok">🎉 Meta batida! E-mail enviado em ${m.enviado.slice(0, 10).split('-').reverse().join('/')}.</li>`);
+  else if (m.emailConfigurado) st.push(`<li class="ok">✓ O e-mail de comemoração sai assim que a soma passar de ${brl(m.valor)}.</li>`);
+  else st.push(`<li class="dim">Este site não envia o e-mail de comemoração (quem envia é o site configurado com MARCO_EMAIL_PARA).</li>`);
+  if (m.parceiroConfigurado && !m.erroParceiro) st.push(`<li class="ok">✓ Somando com o site de ${esc(m.partes[1] ? m.partes[1].dono : 'parceiro')}.</li>`);
+  else if (m.erroParceiro) st.push(`<li class="warn">Não foi possível ler o outro site: ${esc(m.erroParceiro)}.</li>`);
+  else st.push(`<li class="dim">Só este site está na conta (falta configurar MARCO_PARCEIRO_URL e MARCO_TOKEN).</li>`);
+  $('#marco-status').innerHTML = st.join('');
+  $('#marco-teste').hidden = !m.emailConfigurado;
+}
+$('#marco-teste').addEventListener('click', async e => {
+  const b = e.currentTarget; b.disabled = true; b.textContent = 'Enviando…';
+  try { const r = await api('POST', '/api/marco/teste'); toast('E-mail de teste enviado', r.para, null); b.textContent = 'Enviado ✓'; }
+  catch (x) { toast('Não foi possível enviar', x.message, null, { error: true }); b.textContent = 'Enviar e-mail de teste'; }
+  finally { setTimeout(() => { b.disabled = false; b.textContent = 'Enviar e-mail de teste'; }, 2500); }
+});
 async function loadAjustesExtras() {
+  loadMarco();
   try {
     const b = await api('GET', '/api/backup/status');
     $('#backup-status').innerHTML = b.ultimo ? `Último backup automático: <b class="num">${b.ultimo.split('-').reverse().join('/')}</b> · ${plural(b.quantidade, 'cópia guardada', 'cópias guardadas')}` : 'O primeiro backup automático sai logo após o servidor iniciar.';

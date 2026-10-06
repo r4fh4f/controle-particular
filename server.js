@@ -237,6 +237,7 @@ app.post('/api/entries', auth, (req, res) => {
     }
   })();
   res.json({ ok: true, ids });
+  agendarMarco();
 });
 
 app.put('/api/entries/:id', auth, (req, res) => {
@@ -247,6 +248,7 @@ app.put('/api/entries/:id', auth, (req, res) => {
   db.prepare('UPDATE entries SET exame=?,proc=?,valor=?,data=?,medico=?,pagamento=?,taxa=?,updated_at=? WHERE id=?')
     .run(e.exame, e.proc, e.valor, e.data, e.medico, e.pagamento, e.taxa, Date.now(), req.params.id);
   res.json({ ok: true });
+  agendarMarco();
 });
 
 // excluir = mandar para a lixeira (dá para desfazer)
@@ -262,6 +264,7 @@ app.post('/api/entries/restore', auth, (req, res) => {
   const st = db.prepare('UPDATE entries SET deleted_at=NULL WHERE id=?');
   db.transaction(() => ids.forEach(id => st.run(id)))();
   res.json({ ok: true });
+  agendarMarco();
 });
 app.get('/api/trash', auth, (req, res) => {
   res.json(db.prepare(`SELECT ${COLS},deleted_at FROM entries WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC`).all());
@@ -308,6 +311,90 @@ app.get('/api/export.csv', auth, (req, res) => {
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', `attachment; filename="${nome}.csv"`);
   res.send('﻿' + head + '\r\n' + body);   // BOM p/ acentos no Excel
+});
+
+/* ---------- meta conjunta (e-mail de comemoração) ----------
+   Cada site responde o próprio total a quem tiver o MARCO_TOKEN.
+   O site que tem MARCO_EMAIL_PARA soma o seu total com o do parceiro
+   e, ao passar de MARCO_VALOR, envia o e-mail uma única vez. */
+const nodemailer = require('nodemailer');
+const { emailMarco } = require('./marco-email');
+const MARCO = {
+  token: process.env.MARCO_TOKEN || '',
+  parceiro: (process.env.MARCO_PARCEIRO_URL || '').replace(/\/+$/, ''),
+  para: process.env.MARCO_EMAIL_PARA || '',
+  valor: Number(process.env.MARCO_VALOR) || 100000,
+  smtpUser: process.env.SMTP_USER || '',
+  smtpPass: process.env.SMTP_PASS || '',
+};
+const marcoKey = () => 'marco_enviado_' + MARCO.valor;
+function resumoLocal() {
+  const rows = db.prepare('SELECT id,exame,valor,data,atendimento FROM entries WHERE deleted_at IS NULL').all();
+  let bruto = 0, primeiro = null; const at = new Set(), porExame = {}, porMes = {};
+  for (const r of rows) {
+    bruto += r.valor; at.add(r.atendimento || r.id);
+    porExame[r.exame] = (porExame[r.exame] || 0) + 1;
+    const m = r.data.slice(0, 7); porMes[m] = round2((porMes[m] || 0) + r.valor);
+    if (!primeiro || r.data < primeiro) primeiro = r.data;
+  }
+  return { dono: SITE.dono || SITE.nome, bruto: round2(bruto), exames: rows.length, atendimentos: at.size, primeiro, porExame, porMes };
+}
+function marcoTokenOk(t) { return !!MARCO.token && crypto.timingSafeEqual(digest(String(t || '')), digest(MARCO.token)); }
+app.get('/api/marco/total', (req, res) => {
+  if (!marcoTokenOk(req.get('X-Marco-Token'))) return res.status(404).json({ error: 'não encontrado' });
+  res.json(resumoLocal());
+});
+async function situacaoMarco() {
+  const partes = [resumoLocal()]; let erroParceiro = null;
+  if (MARCO.parceiro && MARCO.token) {
+    try {
+      const r = await fetch(MARCO.parceiro + '/api/marco/total', { headers: { 'X-Marco-Token': MARCO.token }, signal: AbortSignal.timeout(10000) });
+      if (!r.ok) throw new Error(r.status === 404 ? 'o outro site recusou a chave (MARCO_TOKEN diferente ou ausente)' : 'o outro site respondeu ' + r.status);
+      partes.push(await r.json());
+    } catch (e) { erroParceiro = e.name === 'TimeoutError' ? 'o outro site não respondeu' : e.message; }
+  }
+  return {
+    valor: MARCO.valor, total: round2(partes.reduce((s, p) => s + p.bruto, 0)), partes, erroParceiro,
+    enviado: getSetting(marcoKey(), null),
+    emailConfigurado: !!(MARCO.para && MARCO.smtpUser && MARCO.smtpPass),
+    parceiroConfigurado: !!(MARCO.parceiro && MARCO.token),
+  };
+}
+async function enviarEmailMarco(s, teste) {
+  // SMTP_HOST=console só imprime o e-mail no log (para testes locais)
+  const transport = process.env.SMTP_HOST === 'console'
+    ? nodemailer.createTransport({ jsonTransport: true })
+    : nodemailer.createTransport({ host: process.env.SMTP_HOST || 'smtp.gmail.com', port: Number(process.env.SMTP_PORT) || 465, secure: true, auth: { user: MARCO.smtpUser, pass: MARCO.smtpPass } });
+  const { assunto, html, texto } = emailMarco(s, teste);
+  const info = await transport.sendMail({ from: `"Controle de Ganhos" <${MARCO.smtpUser}>`, to: MARCO.para, subject: assunto, html, text: texto });
+  if (process.env.SMTP_HOST === 'console') console.log('E-mail (console):', assunto, info.messageId);
+}
+let marcoRodando = false;
+async function verificarMarco() {
+  if (marcoRodando) return; marcoRodando = true;
+  try {
+    if (!MARCO.para || !MARCO.smtpUser || !MARCO.smtpPass || getSetting(marcoKey(), null)) return;
+    const s = await situacaoMarco();
+    if (s.parceiroConfigurado && s.erroParceiro) return;   // sem o total do outro site, tenta mais tarde
+    if (s.total < MARCO.valor) return;
+    await enviarEmailMarco(s, false);
+    setSetting(marcoKey(), new Date().toISOString());
+    console.log(`Meta de ${MARCO.valor} atingida (${s.total}). E-mail enviado para ${MARCO.para}.`);
+  } catch (e) { console.error('Meta conjunta:', e.message); }
+  finally { marcoRodando = false; }
+}
+let marcoTimer = 0;
+const agendarMarco = () => { clearTimeout(marcoTimer); marcoTimer = setTimeout(verificarMarco, 3000); };
+setTimeout(verificarMarco, 30 * 1000);
+setInterval(verificarMarco, 3600 * 1000);   // pega também os lançamentos feitos no outro site
+app.get('/api/marco', auth, async (req, res) => {
+  const s = await situacaoMarco();
+  res.json({ ...s, partes: s.partes.map(p => ({ dono: p.dono, bruto: p.bruto, exames: p.exames })) });
+});
+app.post('/api/marco/teste', auth, async (req, res) => {
+  if (!(MARCO.para && MARCO.smtpUser && MARCO.smtpPass)) return res.status(400).json({ error: 'e-mail não configurado (MARCO_EMAIL_PARA, SMTP_USER, SMTP_PASS)' });
+  try { await enviarEmailMarco(await situacaoMarco(), true); res.json({ ok: true, para: MARCO.para }); }
+  catch (e) { res.status(502).json({ error: 'Falha ao enviar: ' + e.message }); }
 });
 
 /* ---------- backup ---------- */
