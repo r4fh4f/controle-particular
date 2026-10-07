@@ -34,22 +34,38 @@ marcador de foco = média por dia trabalhado) e o ano como um **espectro Doppler
 
 ## Telas
 
-- **Lançar** (`N`, de qualquer tela) — folha com data, um ou mais exames (`Alt` `+` adiciona),
-  médico e pagamento (`1`–`5` ou setas). O valor do exame vem do último valor cobrado. `Enter`
-  avança de campo, `Ctrl+Enter` salva. Inclusão, edição e exclusão têm **Desfazer**.
-  Na worklist: `J`/`K` navegam, `Enter` edita, `Del` exclui, `/` busca.
+- **Lançar** (`N`, de qualquer tela) — folha do atendimento: data, um ou mais exames (`Alt` `+`
+  adiciona), médico e pagamento. O valor do exame vem do último valor cobrado. `Enter` avança de
+  campo, `Ctrl+Enter` salva. Inclusão, edição e exclusão têm **Desfazer**.
+  Na worklist: `J`/`K` navegam, `Enter` edita o atendimento, `Del` exclui o atendimento, `/` busca.
 - **Mês** — navegação ‹ › (ou setas do teclado) por qualquer mês; bruto, líquido, exames,
   atendimentos e ticket médio com comparação ao mês anterior (no mês corrente, até o mesmo dia);
   gráfico por dia, formas de pagamento, US × MG, rankings de exames e médicos (clique filtra a lista),
   lista com busca, filtros e ordenação; exportar CSV do mês.
 - **Ano** — gráfico mês a mês comparando com o ano anterior, tabela mês a mês, média mensal,
   melhor mês, totais por ano; exportar CSV do ano.
-- **Ajustes** — taxas da maquininha (débito, crédito à vista, parcelado), backup, lixeira
-  (exclusões ficam 90 dias), "sair de todos os dispositivos".
+- **Ajustes** — tabela de taxas por maquininha (débito, crédito à vista e 2x a 12x), backup,
+  exportação de exames e de pagamentos, lixeira (exclusões ficam 90 dias), "sair de todos os dispositivos".
 
-**Taxas:** dinheiro e PIX = 100% líquido. Cartão desconta a taxa configurada. Cada lançamento
-guarda a taxa do dia; mudar a taxa em Ajustes vale só para os próximos. Lançamentos antigos
-(anteriores a esta versão) aparecem como "Não informado" e contam como 100% líquido.
+## Pagamentos
+
+O pagamento pertence ao **atendimento** (o paciente), não ao exame, e pode ser **dividido** em até
+4 formas: por exemplo R$ 200 em dinheiro + o restante em crédito 3x. Na folha, "Dividir pagamento"
+(`Alt` `D`) cria outra forma; a última recebe o restante automaticamente.
+
+- **Formas:** Dinheiro, PIX, Débito, Crédito (`1`–`4` ou setas).
+- **Cartão:** escolhe a **maquininha** (ECOS I ou ECOS II — cada unidade tem a sua, com taxas próprias)
+  e, no crédito, as **parcelas**: à vista, 2x … 12x (setas ou números; `1` e `2` em seguida = 12x).
+  O site lembra a última maquininha usada.
+- **Taxas:** dinheiro e PIX = 100% líquido. Cartão desconta a taxa da tabela da maquininha para
+  aquela forma/parcela. Cada pagamento guarda a taxa do dia; mudar a tabela vale só para os próximos.
+- **Líquido:** cada exame guarda a taxa efetiva do atendimento, então a soma dos líquidos dos exames
+  é exatamente o líquido recebido.
+- **Mês:** "Formas de pagamento" (dinheiro, PIX, débito, crédito à vista, crédito parcelado) e
+  "Maquininhas" (quanto passou em cada uma e quanto foi de taxa). O botão "Pagamentos" baixa uma
+  planilha com uma linha por pagamento, para conferir com o extrato de cada maquininha.
+- **Lançamentos antigos:** os da versão anterior foram convertidos sozinhos (sem maquininha
+  informada); os mais antigos ainda aparecem como "Não informado" e contam como 100% líquido.
 
 ## Segurança
 
@@ -118,15 +134,16 @@ Todas as rotas que alteram dados exigem o cabeçalho `X-Requested-With: controle
 | Método | Rota | Descrição |
 |--------|------|-----------|
 | POST | `/api/login` · `/api/logout` · `/api/logout-all` | sessão |
-| GET | `/api/entries` | lançamentos (sem os da lixeira) |
-| POST | `/api/entries` | cria um atendimento (objeto ou array de exames) |
-| PUT | `/api/entries/:id` | edita |
-| POST | `/api/entries/delete` · `/api/entries/restore` | `{ids:[...]}` lixeira / restaurar |
+| GET | `/api/entries` · `/api/pagamentos` | exames e pagamentos (sem os da lixeira) |
+| POST | `/api/atendimentos` | cria um atendimento `{data, medico, exames:[{exame, valor}], pagamentos:[{forma, maquina, parcelas, valor}]}` |
+| PUT | `/api/atendimentos/:chave` | edita o atendimento inteiro (exames com `id` são alterados, sem `id` são incluídos, ausentes são removidos) |
+| POST | `/api/atendimentos/delete` · `/api/atendimentos/restore` | `{keys:[...]}` lixeira / restaurar |
 | GET | `/api/trash` | lixeira |
-| GET/PUT | `/api/settings` | taxas da maquininha |
-| GET | `/api/export.csv?de=AAAA-MM-DD&ate=AAAA-MM-DD` | CSV para Excel |
+| GET/PUT | `/api/settings` | maquininhas: `{maquinas:[{id, nome, debito, credito:[1x..12x]}]}` |
+| GET | `/api/export.csv` · `/api/export-pagamentos.csv` `?de=AAAA-MM-DD&ate=AAAA-MM-DD` | CSV para Excel |
 | GET | `/api/backup` · `/api/backup/status` | cópia do banco |
 
-Campos de um lançamento: `exame`, `valor` (bruto), `data` (`AAAA-MM-DD`), `medico`,
-`pagamento` (`dinheiro`|`pix`|`debito`|`credito`|`credito_parc`), `taxa` (%).
-`proc` (`US`|`MG`) é deduzido do nome do exame.
+A soma dos pagamentos precisa ser igual à soma dos exames. Formas: `dinheiro`, `pix`, `debito`,
+`credito` (`credito_parc` só em lançamentos antigos). `maquina`: `ecos1` / `ecos2`. `parcelas`: 1–12.
+A taxa é a da tabela, salvo quando informada. `proc` (`US`|`MG`) é deduzido do nome do exame.
+As rotas antigas por exame (`/api/entries` POST/PUT/delete/restore) continuam aceitas.

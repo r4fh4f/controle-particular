@@ -20,11 +20,11 @@ const EXAMES_CATALOGO = [
   'Doppler colorido de aorta e artérias renais', 'Doppler colorido de aorta e ilíacas',
   'Doppler colorido de vasos cervicais (carótidas)', 'US - Torácico extracardíaco', 'Mamografia',
 ];
-const PAG = { dinheiro: 'Dinheiro', pix: 'PIX', debito: 'Débito', credito: 'Crédito', credito_parc: 'Parcelado' };
-const PAGK = Object.keys(PAG);
-const CARTOES = ['debito', 'credito', 'credito_parc'];
+const FORMAS = ['dinheiro', 'pix', 'debito', 'credito'];
+const FORMA_NOME = { dinheiro: 'Dinheiro', pix: 'PIX', debito: 'Débito', credito: 'Crédito', credito_parc: 'Parcelado' };
+const CARTOES = ['debito', 'credito', 'credito_parc'];   // credito_parc = lançamentos antigos, sem nº de parcelas
 const SEM_PAG = 'Não informado';
-const pagNome = p => p ? PAG[p] : SEM_PAG;
+const procOf = ex => /mamografia/i.test(ex) ? 'MG' : 'US';
 
 /* ---------- util ---------- */
 const $ = (s, r = document) => r.querySelector(s);
@@ -60,8 +60,9 @@ function parseMoney(s) {
 }
 
 /* ---------- estado ---------- */
-let entries = [];
-let settings = { taxas: { debito: 0, credito: 0, credito_parc: 0 }, taxasConferidas: true };
+let entries = [], pagamentos = [];
+let settings = { maquinas: [], taxasConferidas: true, maxParcelas: 12 };
+let entsByAt = new Map(), paysByAt = new Map();   // exames e pagamentos agrupados por atendimento
 let cfg = { nome: 'Controle de Ganhos', dono: '' };
 let route = { page: '' };
 let lastYm = curYM();
@@ -82,8 +83,45 @@ async function api(method, url, body) {
   if (!r.ok) throw new ApiErr((data && data.error) || 'Erro no servidor.', r.status, data);
   return data;
 }
-async function loadEntries() { entries = await api('GET', '/api/entries'); }
-async function loadAll() { const [e, s] = await Promise.all([api('GET', '/api/entries'), api('GET', '/api/settings')]); entries = e; settings = s; }
+async function loadEntries() { const [e, p] = await Promise.all([api('GET', '/api/entries'), api('GET', '/api/pagamentos')]); entries = e; pagamentos = p; indexar(); }
+async function loadAll() { const [e, p, s] = await Promise.all([api('GET', '/api/entries'), api('GET', '/api/pagamentos'), api('GET', '/api/settings')]); entries = e; pagamentos = p; settings = s; indexar(); }
+
+/* ---------- pagamentos (pertencem ao atendimento; podem ser divididos) ---------- */
+const atKey = e => e.atendimento || e.id;
+function indexar() {
+  entsByAt = new Map(); for (const e of entries) { const k = atKey(e); if (!entsByAt.has(k)) entsByAt.set(k, []); entsByAt.get(k).push(e); }
+  paysByAt = new Map(); for (const p of pagamentos) { if (!paysByAt.has(p.atendimento)) paysByAt.set(p.atendimento, []); paysByAt.get(p.atendimento).push(p); }
+  for (const l of paysByAt.values()) l.sort((a, b) => (a.ordem || 0) - (b.ordem || 0));
+}
+function partsOf(key) {
+  const ps = paysByAt.get(key); if (ps && ps.length) return ps;
+  // lançamento antigo sem registro de pagamento: deduz do próprio exame
+  const g = new Map();
+  for (const e of entsByAt.get(key) || []) {
+    if (!e.pagamento || e.pagamento === 'misto') continue;
+    const k = e.pagamento + '|' + (e.taxa || 0);
+    const o = g.get(k) || { forma: e.pagamento, maquina: null, maquina_nome: null, parcelas: e.pagamento === 'credito' ? 1 : null, valor: 0, taxa: e.taxa || 0 };
+    o.valor = r2(o.valor + e.valor); g.set(k, o);
+  }
+  return [...g.values()];
+}
+function partLabel(p) {
+  let s = FORMA_NOME[p.forma] || p.forma;
+  if (p.forma === 'credito') s += p.parcelas > 1 ? ` ${p.parcelas}x` : p.parcelas === 1 ? ' à vista' : '';
+  if (p.maquina_nome) s += ` · ${p.maquina_nome}`;
+  return s;
+}
+function paySummary(ps) {
+  if (!ps.length) return SEM_PAG;
+  if (ps.length === 1) return partLabel(ps[0]);
+  return ps.map(p => (FORMA_NOME[p.forma] || p.forma) + (p.forma === 'credito' && p.parcelas > 1 ? ` ${p.parcelas}x` : '')).join(' + ');
+}
+const payTip = ps => ps.map(p => `${partLabel(p)}: ${brl(p.valor)}${p.taxa ? ` · taxa ${N2.format(p.taxa)}%` : ''}`).join('\n');
+function categoria(p) {
+  if (p.forma === 'credito') return (p.parcelas || 1) > 1 ? 'Crédito parcelado' : 'Crédito à vista';
+  if (p.forma === 'credito_parc') return 'Crédito parcelado';
+  return FORMA_NOME[p.forma] || SEM_PAG;
+}
 
 /* ---------- agregações ---------- */
 const liq = e => r2(e.valor * (1 - (e.taxa || 0) / 100));
@@ -121,12 +159,14 @@ function setRoll(el, str, animate = true) {
   el.setAttribute('aria-label', str);
 }
 function slide(container, sel) {
-  const ind = container && container.querySelector('.ind'); if (!ind) return;
+  const ind = container && container.querySelector(':scope > .ind'); if (!ind) return;
   const on = container.querySelector(sel);
   if (!on) { ind.style.opacity = '0'; return; }
-  ind.style.opacity = '1'; ind.style.width = on.offsetWidth + 'px';
-  if (container.classList.contains('tabs')) { ind.style.height = on.offsetHeight + 'px'; ind.style.transform = `translate(${on.offsetLeft}px,${on.offsetTop}px)`; }
-  else ind.style.transform = `translateX(${on.offsetLeft}px)`;
+  const first = ind.style.opacity !== '1';   // na primeira vez aparece no lugar, sem deslizar
+  if (first) ind.style.transition = 'none';
+  ind.style.opacity = '1'; ind.style.width = on.offsetWidth + 'px'; ind.style.height = on.offsetHeight + 'px';
+  ind.style.transform = `translate(${on.offsetLeft}px,${on.offsetTop}px)`;
+  if (first) { void ind.offsetWidth; ind.style.transition = ''; }
 }
 
 /* ============================================================
@@ -145,7 +185,7 @@ function placeTip(x, y) {
 function showTipAt(x, y, html) { clearTimeout(tipTimer); tipEl = null; tip.classList.add('instant'); tip.innerHTML = html; tip.classList.add('on'); placeTip(x, y); }
 function hideTip() { clearTimeout(tipTimer); if (tip.classList.contains('on')) tipWarmUntil = performance.now() + 500; tip.classList.remove('on'); tipEl = null; }
 function tipFor(el) {
-  const html = esc(el.dataset.tip) + (el.dataset.kbd ? `<kbd>${esc(el.dataset.kbd)}</kbd>` : '');
+  const html = `<span class="pl">${esc(el.dataset.tip)}</span>` + (el.dataset.kbd ? `<kbd>${esc(el.dataset.kbd)}</kbd>` : '');
   const show = () => {
     if (!el.isConnected) return;
     tip.innerHTML = html; tip.classList.toggle('instant', performance.now() < tipWarmUntil); tip.classList.add('on'); tipEl = el;
@@ -373,11 +413,23 @@ function renderMes(dir, { sweepIt = true } = {}) {
     row('Atendimentos', a.at, a.at ? ` <small>ticket ${brl(a.b / a.at)}</small>` : '') +
     row('Média por dia trabalhado', '▸ ' + brl(avg), '', 'focal') +
     row('Melhor dia', best >= 0 ? `${pad(best + 1)}/${ym.slice(5)} · ${brl(v[best])}` : '—');
-  // formas de pagamento
-  const pm = new Map(); for (const e of list) { const k = e.pagamento || ''; const o = pm.get(k) || { s: 0, n: 0 }; o.s += e.valor; o.n++; pm.set(k, o); }
-  const pmax = Math.max(1, ...[...pm.values()].map(o => o.s));
-  $('#mix').innerHTML = [...pm.entries()].sort((x, y) => y[1].s - x[1].s).map(([k, o]) =>
-    `<div class="it"><span class="nm">${pagNome(k)}</span><div class="track"><div class="fill" style="transform:scaleX(${o.s / pmax})"></div></div><span class="vv"><b>${brl(o.s)}</b> · ${N0.format(o.s / (a.b || 1) * 100)}%</span></div>`).join('') || '<span class="dim">Sem lançamentos</span>';
+  // formas de pagamento e maquininhas (a partir dos pagamentos de cada atendimento)
+  const cat = new Map(), maq = new Map();
+  for (const k of new Set(list.map(atKey))) {
+    const ps = partsOf(k);
+    if (!ps.length) { const o = cat.get(SEM_PAG) || { s: 0 }; o.s += (entsByAt.get(k) || []).reduce((s2, e) => s2 + e.valor, 0); cat.set(SEM_PAG, o); continue; }
+    for (const pg of ps) {
+      const c = categoria(pg), o = cat.get(c) || { s: 0 }; o.s += pg.valor; cat.set(c, o);
+      if (CARTOES.includes(pg.forma)) { const mk = pg.maquina_nome || 'Não informada', m = maq.get(mk) || { s: 0, t: 0 }; m.s += pg.valor; m.t += pg.valor * (pg.taxa || 0) / 100; maq.set(mk, m); }
+    }
+  }
+  const pmax = Math.max(1, ...[...cat.values()].map(o => o.s));
+  $('#mix').innerHTML = [...cat.entries()].sort((x, y) => y[1].s - x[1].s).map(([k, o]) =>
+    `<div class="it"><span class="nm">${esc(k)}</span><div class="track"><div class="fill" style="transform:scaleX(${o.s / pmax})"></div></div><span class="vv"><b>${brl(o.s)}</b> · ${N0.format(o.s / (a.b || 1) * 100)}%</span></div>`).join('') || '<span class="dim">Sem lançamentos</span>';
+  const mmax = Math.max(1, ...[...maq.values()].map(o => o.s));
+  $('#maqs-box').hidden = !maq.size;
+  $('#maqs').innerHTML = [...maq.entries()].sort((x, y) => x[0].localeCompare(y[0], 'pt-BR')).map(([k, o]) =>
+    `<div class="it"><span class="nm">${esc(k)}</span><div class="track"><div class="fill" style="transform:scaleX(${o.s / mmax})"></div></div><span class="vv"><b>${brl(o.s)}</b> · taxas ${brl(o.t)}</span></div>`).join('');
   // anotações estilo aparelho
   const us = list.filter(e => e.proc !== 'MG').length;
   $('#ann-tl').innerHTML = `<b>${MES[M - 1]} ${Y}</b> · ${a.n} ex · ${a.at} atd<br>${us} US · ${a.n - us} MG<br>1 linha = 1 dia · profundidade = bruto`;
@@ -387,6 +439,7 @@ function renderMes(dir, { sweepIt = true } = {}) {
   runSweep(sweepIt && !rapid);
   drawDop($('#dop'), Y); $('#lg-y').textContent = Y; $('#lg-p').textContent = Y - 1; $('#spec-title').textContent = `Espectro anual · ${Y} · clique num mês`;
   $('#exp-mes').href = `/api/export.csv?de=${ym}-01&ate=${ym}-${daysIn(ym)}&nome=ganhos-${ym}`;
+  $('#exp-pag').href = `/api/export-pagamentos.csv?de=${ym}-01&ate=${ym}-${daysIn(ym)}&nome=pagamentos-${ym}`;
   renderWL(); renderRank();
 }
 function renderCine() {
@@ -416,11 +469,15 @@ function renderWL(scroll) {
   $('#wl').innerHTML = l.length ? [...by.entries()].map(([d, es]) => {
     const a = agg(es); const dt = dateOf(d);
     return `<div class="day" role="presentation"><span class="d">${DOW[dt.getDay()]} <b>${d.slice(8)}</b> ${MES[dt.getMonth()]}</span><span class="t">${a.n} ex · <b>${brl(a.b)}</b></span></div>` +
-      es.map(e => `<div class="r${fresh.has(e.id) ? ' ghost' : ''}${e.pending ? ' pending' : ''}" data-id="${esc(e.id)}" tabindex="0" role="listitem" aria-label="${esc(e.exame)}, ${esc(e.medico)}, ${brl(e.valor)}">
+      es.map((e, i) => {
+        const k = atKey(e), ps = partsOf(k), n = (entsByAt.get(k) || []).length;
+        const grp = n > 1 ? ` ga${es[i - 1] && atKey(es[i - 1]) === k ? '' : ' ga-first'}${es[i + 1] && atKey(es[i + 1]) === k ? '' : ' ga-last'}` : '';
+        return `<div class="r${grp}${fresh.has(e.id) ? ' ghost' : ''}${e.pending ? ' pending' : ''}" data-id="${esc(e.id)}" data-at="${esc(k)}" tabindex="0" role="listitem" aria-label="${esc(e.exame)}, ${esc(e.medico)}, ${brl(e.valor)}, ${esc(paySummary(ps))}">
         <div class="ex"><span class="tg${e.proc === 'MG' ? ' mg' : ''}">${e.proc}</span><span>${esc(e.exame)}</span></div>
-        <span class="md">${esc(e.medico)}</span><span class="pg">${pagNome(e.pagamento)}${e.taxa ? ` · ${N1.format(e.taxa)}%` : ''}</span>
+        <span class="md">${esc(e.medico)}</span><span class="pg"${ps.length ? ` data-tip="${esc(payTip(ps))}"` : ''}>${esc(paySummary(ps))}</span>
         <span class="vl">${brl(e.valor)}${e.taxa ? `<small>${brl(liq(e))}</small>` : ''}</span>
-        <span class="ac"><button class="ib hit" data-act="edit" data-tip="Editar" data-kbd="↵" aria-label="Editar">${ICON_E}</button><button class="ib del hit" data-act="del" data-tip="Excluir" data-kbd="Del" aria-label="Excluir">${ICON_D}</button></span></div>`).join('');
+        <span class="ac"><button class="ib hit" data-act="edit" data-tip="Editar atendimento" data-kbd="↵" aria-label="Editar atendimento">${ICON_E}</button><button class="ib del hit" data-act="del" data-tip="${n > 1 ? `Excluir atendimento (${n} exames)` : 'Excluir'}" data-kbd="Del" aria-label="Excluir atendimento">${ICON_D}</button></span></div>`;
+      }).join('');
   }).join('') : `<div class="empty">${q || pinDay || filt ? 'Nenhum exame com esses filtros' : 'Nenhum exame neste mês · pressione <kbd>N</kbd> para lançar'}</div>`;
   fresh.clear();
   if (focusedId) { const r = $(`#wl .r[data-id="${CSS.escape(focusedId)}"]`); if (r) r.focus({ preventScroll: true }); }
@@ -435,13 +492,16 @@ $('#chips').addEventListener('click', e => { const b = e.target.closest('[data-u
 $('#wl').addEventListener('click', e => {
   const row = e.target.closest('.r'); if (!row || row.classList.contains('pending')) return;
   const act = e.target.closest('[data-act]');
-  if (act && act.dataset.act === 'del') deleteEntries([row.dataset.id]);
-  else openSheet({ mode: 'edit', entry: entries.find(x => x.id === row.dataset.id) });
+  if (act && act.dataset.act === 'del') deleteAtendimento(row.dataset.at);
+  else openSheet({ mode: 'edit', key: row.dataset.at });
 });
+// passar o mouse num exame destaca os outros do mesmo atendimento
+$('#wl').addEventListener('mouseover', e => { const r = e.target.closest('.r.ga'); $$('#wl .r.hl').forEach(x => { if (!r || x.dataset.at !== r.dataset.at) x.classList.remove('hl'); }); if (r) $$(`#wl .r[data-at="${CSS.escape(r.dataset.at)}"]`).forEach(x => x.classList.add('hl')); });
+$('#wl').addEventListener('mouseleave', () => $$('#wl .r.hl').forEach(x => x.classList.remove('hl')));
 $('#wl').addEventListener('keydown', e => {
   const row = e.target.closest('.r'); if (!row || e.target !== row) return;
-  if (e.key === 'Enter') { e.preventDefault(); openSheet({ mode: 'edit', entry: entries.find(x => x.id === row.dataset.id) }); }
-  if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); deleteEntries([row.dataset.id]); }
+  if (e.key === 'Enter') { e.preventDefault(); openSheet({ mode: 'edit', key: row.dataset.at }); }
+  if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); deleteAtendimento(row.dataset.at); }
 });
 function moveRow(d) {
   const rows = $$('#wl .r'); if (!rows.length) return;
@@ -513,11 +573,21 @@ wireDop($('#dop2'), m => { location.hash = '#/mes/' + m; });
    TELA: AJUSTES
    ============================================================ */
 function renderAjustes() {
-  const t = settings.taxas;
-  $('#taxgrid').innerHTML = CARTOES.map(k => `<label><span class="eyebrow">${k === 'credito' ? 'Crédito à vista' : PAG[k]}</span><span class="pct"><input class="inp" name="${k}" inputmode="decimal" value="${N2.format(t[k] || 0)}" aria-label="Taxa ${PAG[k]} em %"></span></label>`).join('');
+  const n = settings.maxParcelas || 12, col = i => i ? `${i + 1}x` : 'À vista';
+  $('#taxmat').innerHTML = `<thead><tr><th>Maquininha</th><th>Débito</th>${Array.from({ length: n }, (_, i) => `<th>${col(i)}</th>`).join('')}</tr></thead>
+    <tbody>${settings.maquinas.map(m => `<tr data-id="${esc(m.id)}"><td><input class="inp nm" name="nome" value="${esc(m.nome)}" maxlength="30" aria-label="Nome da maquininha"></td>
+      <td><span class="pct"><input class="inp tx" name="debito" inputmode="decimal" value="${N2.format(m.debito)}" aria-label="${esc(m.nome)}: débito, %"></span></td>
+      ${m.credito.map((v, i) => `<td><span class="pct"><input class="inp tx" name="c${i}" inputmode="decimal" value="${N2.format(v)}" aria-label="${esc(m.nome)}: crédito ${col(i).toLowerCase()}, %"></span></td>`).join('')}</tr>`).join('')}</tbody>`;
   $('#taxas-badge').hidden = settings.taxasConferidas;
   loadAjustesExtras();
 }
+// ↑ ↓ ajustam a taxa em 0,01 (Shift: 0,10)
+$('#taxmat').addEventListener('keydown', e => {
+  const i = e.target.closest('input.tx'); if (!i || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) return;
+  e.preventDefault(); const st = e.shiftKey ? .1 : .01, v = parseMoney(i.value) || 0;
+  i.value = N2.format(Math.min(30, Math.max(0, r2(v + (e.key === 'ArrowUp' ? st : -st))))); i.classList.remove('err');
+});
+$('#taxmat').addEventListener('focusout', e => { const i = e.target.closest('input.tx'); if (!i) return; const v = parseMoney(i.value); if (v >= 0) i.value = N2.format(v); });
 async function loadMarco() {
   let m;
   try { m = await api('GET', '/api/marco'); } catch (e) { $('#marco-status').innerHTML = `<li class="warn">Não foi possível calcular a meta.</li>`; return; }
@@ -551,24 +621,30 @@ async function loadAjustesExtras() {
   } catch (e) { $('#backup-status').textContent = 'Não foi possível verificar os backups.'; }
   try {
     const tr = await api('GET', '/api/trash');
-    $('#trash').innerHTML = tr.length ? `<div class="trash">${tr.map(e => `<div class="r" data-id="${esc(e.id)}"><span class="pg">${e.data.split('-').reverse().join('/')}</span>
+    $('#trash').innerHTML = tr.length ? `<div class="trash">${tr.map(e => `<div class="r" data-id="${esc(e.id)}" data-at="${esc(atKey(e))}"><span class="pg">${e.data.split('-').reverse().join('/')}</span>
       <div class="ex"><span class="tg${e.proc === 'MG' ? ' mg' : ''}">${e.proc}</span><span>${esc(e.exame)}</span></div><span class="md">${esc(e.medico)}</span>
       <span class="vl">${brl(e.valor)}</span><span style="text-align:right"><button class="ghostbtn press" data-restore>Restaurar</button></span></div>`).join('')}</div>`
       : '<div class="empty">Lixeira vazia</div>';
   } catch (e) { $('#trash').innerHTML = '<div class="empty">Não foi possível carregar.</div>'; }
 }
 $('#trash').addEventListener('click', async e => {
-  const b = e.target.closest('[data-restore]'); if (!b) return; const row = b.closest('.r'); const id = row.dataset.id;
-  row.style.height = row.offsetHeight + 'px'; void row.offsetHeight; row.classList.add('gone');
-  try { await api('POST', '/api/entries/restore', { ids: [id] }); await loadEntries(); toast('Exame restaurado', '', null); setTimeout(loadAjustesExtras, 260); }
+  const b = e.target.closest('[data-restore]'); if (!b) return; const row = b.closest('.r'); const key = row.dataset.at;
+  $$(`#trash .r[data-at="${CSS.escape(key)}"]`).forEach(r => { r.style.height = r.offsetHeight + 'px'; void r.offsetHeight; r.classList.add('gone'); });
+  try { await api('POST', '/api/atendimentos/restore', { keys: [key] }); await loadEntries(); toast('Atendimento restaurado', '', null); setTimeout(loadAjustesExtras, 260); }
   catch (err) { toast(err.message, '', null, { error: true }); loadAjustesExtras(); }
 });
 $('#taxas-form').addEventListener('submit', async e => {
-  e.preventDefault(); const f = e.target, err = $('#taxas-err'), btn = $('#taxas-save'); err.textContent = '';
-  const taxas = {}; for (const k of CARTOES) taxas[k] = parseMoney(f[k].value);
+  e.preventDefault(); const err = $('#taxas-err'), btn = $('#taxas-save'); err.textContent = '';
+  const n = settings.maxParcelas || 12; let bad = null;
+  const maquinas = $$('#taxmat tbody tr').map(tr => {
+    const num = name => { const i = $(`[name=${name}]`, tr), v = parseMoney(i.value); if (!(v >= 0 && v <= 30)) { i.classList.add('err'); bad = bad || i; } else i.classList.remove('err'); return v; };
+    const nm = $('[name=nome]', tr); if (!nm.value.trim()) { nm.classList.add('err'); bad = bad || nm; }
+    return { id: tr.dataset.id, nome: nm.value.trim(), debito: num('debito'), credito: Array.from({ length: n }, (_, i) => num('c' + i)) };
+  });
+  if (bad) { err.textContent = 'Confira os campos marcados: taxas de 0 a 30% e um nome para cada maquininha.'; bad.focus(); return; }
   btn.disabled = true;
   try {
-    await api('PUT', '/api/settings', { taxas }); settings = await api('GET', '/api/settings');
+    await api('PUT', '/api/settings', { maquinas }); settings = await api('GET', '/api/settings');
     btn.textContent = 'Salvo ✓'; setTimeout(() => { btn.textContent = 'Salvar taxas'; }, 1600);
     $('#taxas-badge').hidden = true; $('#aj-dot').hidden = true; renderAjustes();
   } catch (x) { err.textContent = x.message; }
@@ -584,10 +660,10 @@ $('#logout-all').addEventListener('click', async e => {
 });
 
 /* ============================================================
-   FOLHA DE LANÇAMENTO / EDIÇÃO
+   FOLHA DE LANÇAMENTO / EDIÇÃO (o atendimento inteiro)
    ============================================================ */
 const ov = $('#ov'), form = $('#sheet');
-let sheet = { mode: 'add' }, payVal = '', lastFocus = null;
+let sheet = { mode: 'add' }, lastFocus = null, parts = [];
 function combobox(input, optionsFn, onPick) {
   const box = input.closest('.cb'); let ul = null, items = [], act = 0;
   const close = () => { if (ul) { ul.remove(); ul = null; } input.setAttribute('aria-expanded', 'false'); };
@@ -616,8 +692,8 @@ function combobox(input, optionsFn, onPick) {
     else if (e.key === 'Tab' && ul && items.length && input.value.trim() && !e.shiftKey) { pick(act); }
   });
 }
-function addRow({ ex = '', vl = '', focus = true } = {}) {
-  const d = document.createElement('div'); d.className = 'exrow';
+function addRow({ ex = '', vl = '', id = '', focus = true } = {}) {
+  const d = document.createElement('div'); d.className = 'exrow'; d.dataset.id = id;
   d.innerHTML = `<div class="cb"><input class="inp" name="ex" placeholder="Exame — digite para buscar" role="combobox" aria-expanded="false" aria-label="Exame"></div>
     <div class="money"><input class="inp" name="vl" inputmode="decimal" placeholder="0,00" aria-label="Valor"><span class="lp" hidden>último valor cobrado</span></div>
     <button type="button" class="x press" aria-label="Remover exame" data-tip="Remover exame">✕</button>`;
@@ -632,7 +708,7 @@ function addRow({ ex = '', vl = '', focus = true } = {}) {
   vlI.addEventListener('input', () => { vlI.classList.remove('err'); lp.hidden = true; updateTotals(); });
   vlI.addEventListener('focus', () => vlI.select());
   vlI.addEventListener('blur', () => { const n = parseMoney(vlI.value); if (n > 0) vlI.value = N2.format(n); });
-  vlI.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey) { e.preventDefault(); $('#f-med').value ? $('#pay button[tabindex="0"]').focus() : $('#f-med').focus(); } });
+  vlI.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey) { e.preventDefault(); $('#f-med').value ? focusPay() : $('#f-med').focus(); } });
   d.querySelector('.x').addEventListener('click', () => {
     if ($$('#f-rows .exrow').length > 1) {
       if (reduce) { d.remove(); updateTotals(); return; }
@@ -641,59 +717,202 @@ function addRow({ ex = '', vl = '', focus = true } = {}) {
   });
   if (focus) exI.focus();
 }
-combobox($('#f-med'), () => freq('medico').map(m => ({ label: m })), () => { $('#pay button[tabindex="0"]').focus(); });
-$('#f-med').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey && $('#f-med').getAttribute('aria-expanded') !== 'true') { e.preventDefault(); $('#pay button[tabindex="0"]').focus(); } });
-$('#pay').innerHTML = PAGK.map((k, i) => `<button type="button" role="radio" aria-checked="false" data-k="${k}" tabindex="${i ? -1 : 0}"><span class="n">${i + 1}</span>${PAG[k]}</button>`).join('') + '<span class="ind"></span>';
-function defaultTaxa(k) { if (!CARTOES.includes(k)) return 0; if (sheet.mode === 'edit' && sheet.entry && sheet.entry.pagamento === k) return sheet.entry.taxa || 0; return settings.taxas[k] || 0; }
-function setPay(k, focus) {
-  payVal = k;
-  $$('#pay button').forEach(b => { const on = b.dataset.k === k; b.setAttribute('aria-checked', on); b.tabIndex = on || (!k && b === $('#pay button')) ? 0 : -1; if (on && focus) b.focus(); });
-  $('#pay').classList.remove('err'); slide($('#pay'), '[aria-checked="true"]');
-  const t = $('#taxa');
-  if (CARTOES.includes(k)) {
-    t.innerHTML = `Taxa da maquininha <span class="pct"><input class="inp" id="f-taxa" inputmode="decimal" value="${N2.format(defaultTaxa(k))}" aria-label="Taxa da maquininha em %"></span><span>${settings.taxasConferidas ? 'padrão de Ajustes' : '<span style="color:var(--caliper)">confira as taxas em Ajustes</span>'}</span>`;
-    $('#f-taxa').addEventListener('input', updateTotals);
-    $('#f-taxa').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.ctrlKey) { e.preventDefault(); form.requestSubmit(); } });
-  } else t.innerHTML = k ? 'Sem taxa — entra 100% líquido' : '';
-  updateTotals();
+combobox($('#f-med'), () => freq('medico').map(m => ({ label: m })), () => focusPay());
+$('#f-med').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey && $('#f-med').getAttribute('aria-expanded') !== 'true') { e.preventDefault(); focusPay(); } });
+function sheetRows() { return $$('#f-rows .exrow').map(d => ({ d, id: d.dataset.id || '', ex: d.querySelector('[name=ex]').value.trim(), vl: parseMoney(d.querySelector('[name=vl]').value) })); }
+
+/* ---------- formas de pagamento: uma ou várias (dinheiro + cartão…) ---------- */
+const MAXP = () => settings.maxParcelas || 12;
+const nomeMaq = id => { const m = settings.maquinas.find(x => x.id === id); return m ? m.nome : null; };
+function maqPadrao() {   // lembra a última maquininha usada (cada unidade tem a sua)
+  let id = null; try { id = localStorage.getItem('ultimaMaquina'); } catch (e) { /* sem storage */ }
+  return settings.maquinas.some(m => m.id === id) ? id : ((settings.maquinas[0] || {}).id || null);
 }
-$('#pay').addEventListener('click', e => { const b = e.target.closest('button'); if (b) setPay(b.dataset.k); });
-$('#pay').addEventListener('keydown', e => {
-  const i = PAGK.indexOf(payVal);
-  if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') { e.preventDefault(); const n = i < 0 ? 0 : (i + (e.key === 'ArrowRight' ? 1 : -1) + PAGK.length) % PAGK.length; setPay(PAGK[n], true); }
-  else if (/^[1-5]$/.test(e.key)) { e.preventDefault(); setPay(PAGK[+e.key - 1], true); }
-  else if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey) { e.preventDefault(); if (!payVal) { const b = e.target.closest('button'); if (b) setPay(b.dataset.k, true); } else form.requestSubmit(); }
-});
-function sheetRows() { return $$('#f-rows .exrow').map(d => ({ d, ex: d.querySelector('[name=ex]').value.trim(), vl: parseMoney(d.querySelector('[name=vl]').value) })); }
-function curTaxa() { const el = $('#f-taxa'); if (!el || !CARTOES.includes(payVal)) return 0; const t = parseMoney(el.value); return t >= 0 ? t : 0; }
+function taxaPara(p) {
+  if (p.fixa) return p.taxa || 0;   // pagamento já lançado e não alterado: mantém a taxa do dia
+  const m = settings.maquinas.find(x => x.id === p.maquina);
+  if (!m) return 0;
+  if (p.forma === 'debito') return m.debito || 0;
+  if (p.forma === 'credito') return m.credito[(p.parcelas || 1) - 1] || 0;
+  return 0;
+}
+function focusGroup(box) { const b = box.querySelector('[aria-checked="true"]') || box.querySelector('button'); if (b) b.focus(); }
+function focusPay() { const p = parts[0]; if (!p) return; if (parts.length > 1) $('.pp-val input', p.el).focus(); else focusGroup($('.pp-forma', p.el)); }
+// teclado nos grupos de opção: ← → escolhem, números escolhem direto (12 = "1" e "2" em seguida), Enter avança
+function radioKeys(box, values, cur, set, onEnter, { buffer = false } = {}) {
+  let buf = '', bufT = 0;
+  box.addEventListener('keydown', e => {
+    const vals = values(), i = vals.indexOf(cur());
+    if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') { e.preventDefault(); set(vals[i < 0 ? 0 : Math.max(0, Math.min(vals.length - 1, i + (e.key === 'ArrowRight' ? 1 : -1)))]); }
+    else if (/^\d$/.test(e.key) && !e.altKey) {
+      e.preventDefault();
+      buf = buffer && performance.now() - bufT < 700 ? buf + e.key : e.key; bufT = performance.now();
+      let n = +buf; if (!(n >= 1 && n <= vals.length)) { buf = e.key; n = +buf; }
+      if (n >= 1 && n <= vals.length) set(vals[n - 1]);
+    }
+    else if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey) { e.preventDefault(); if (i < 0) { const b = e.target.closest('button'); if (b) { b.click(); return; } } onEnter(); }
+  });
+}
+function makePart(init = {}) {
+  const p = { forma: init.forma || '', maquina: init.maquina || null, parcelas: init.parcelas || null, maquina_nome: init.maquina_nome || null,
+    valorTxt: init.valor != null ? N2.format(init.valor) : '', taxa: init.taxa || 0, fixa: !!init.fixa };
+  if (!p.maquina && !p.fixa) p.maquina = maqPadrao();
+  if (p.forma === 'credito' && !p.parcelas && !p.fixa) p.parcelas = 1;
+  const el = document.createElement('div'); el.className = 'ppart';
+  el.innerHTML = `
+    <div class="pp-top">
+      <div class="money pp-val"><input class="inp" inputmode="decimal" placeholder="0,00"></div>
+      <div class="pay pp-forma" role="radiogroup" aria-label="Forma de pagamento">${FORMAS.map((k, i) => `<button type="button" role="radio" data-k="${k}" aria-checked="false" tabindex="-1"><span class="n">${i + 1}</span>${FORMA_NOME[k]}</button>`).join('')}<span class="ind"></span></div>
+      <button type="button" class="x press pp-x" aria-label="Remover esta forma de pagamento" data-tip="Remover esta forma">✕</button>
+    </div>
+    <div class="reveal pp-card"><div class="reveal-in">
+      <div class="pp-row"><span class="pp-lab">Maquininha</span><div class="pay pp-maq" role="radiogroup" aria-label="Maquininha" style="--n:${settings.maquinas.length}">${settings.maquinas.map((m, i) => `<button type="button" role="radio" data-m="${esc(m.id)}" aria-checked="false" tabindex="-1"><span class="n">${i + 1}</span>${esc(m.nome)}</button>`).join('')}<span class="ind"></span></div></div>
+      <div class="reveal pp-parc"><div class="reveal-in"><div class="pp-row"><span class="pp-lab">Parcelas</span><div class="pay pp-np" role="radiogroup" aria-label="Número de parcelas">${Array.from({ length: MAXP() }, (_, i) => `<button type="button" role="radio" data-p="${i + 1}" aria-checked="false" tabindex="-1">${i ? `${i + 1}x` : 'À vista'}</button>`).join('')}<span class="ind"></span></div></div></div></div>
+    </div></div>
+    <div class="pp-taxa"></div>`;
+  p.el = el;
+  const forma = $('.pp-forma', el), maq = $('.pp-maq', el), np = $('.pp-np', el), val = $('.pp-val input', el);
+  const setF = (k, focus) => {
+    if (p.forma !== k) { p.forma = k; p.fixa = false; if (k === 'credito' && !p.parcelas) p.parcelas = 1; if ((k === 'debito' || k === 'credito') && !p.maquina) p.maquina = maqPadrao(); }
+    forma.classList.remove('err'); paintPart(p, focus ? 'pp-forma' : null); updateTotals();
+  };
+  const setM = (id, focus) => {
+    if (p.maquina !== id) { p.maquina = id; p.fixa = false; try { localStorage.setItem('ultimaMaquina', id); } catch (e) { /* sem storage */ } }
+    maq.classList.remove('err'); paintPart(p, focus ? 'pp-maq' : null); updateTotals();
+  };
+  const setN = (n, focus) => {
+    if (p.parcelas !== n || p.forma !== 'credito') { p.parcelas = n; p.fixa = false; p.forma = 'credito'; }
+    paintPart(p, focus ? 'pp-np' : null); updateTotals();
+  };
+  forma.addEventListener('click', e => { const b = e.target.closest('button'); if (b) setF(b.dataset.k); });
+  maq.addEventListener('click', e => { const b = e.target.closest('button'); if (b) setM(b.dataset.m); });
+  np.addEventListener('click', e => { const b = e.target.closest('button'); if (b) setN(+b.dataset.p); });
+  radioKeys(forma, () => FORMAS, () => p.forma === 'credito_parc' ? 'credito' : p.forma, k => setF(k, true), () => advance(p, 'forma'));
+  radioKeys(maq, () => settings.maquinas.map(m => m.id), () => p.maquina, id => setM(id, true), () => advance(p, 'maq'));
+  radioKeys(np, () => Array.from({ length: MAXP() }, (_, i) => i + 1), () => p.forma === 'credito' ? p.parcelas : null, n => setN(n, true), () => advance(p, 'np'), { buffer: true });
+  val.addEventListener('input', () => { p.valorTxt = val.value; val.classList.remove('err'); updateTotals(); });
+  val.addEventListener('focus', () => { if (!val.readOnly) val.select(); });
+  val.addEventListener('blur', () => { if (val.readOnly) return; const n = parseMoney(val.value); if (n > 0) { val.value = N2.format(n); p.valorTxt = val.value; } });
+  val.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey) { e.preventDefault(); focusGroup(forma); } });
+  $('.pp-x', el).addEventListener('click', () => removePart(p));
+  return p;
+}
+function paintPart(p, focusGrp) {
+  const el = p.el;
+  const mark = (grp, attr, v) => {
+    const box = $('.' + grp, el);
+    $$('button', box).forEach((b, i) => { const on = v != null && v !== '' && b.dataset[attr] === String(v); b.setAttribute('aria-checked', on); b.tabIndex = on || ((v == null || v === '') && i === 0) ? 0 : -1; if (on && focusGrp === grp) b.focus(); });
+    slide(box, '[aria-checked="true"]');
+  };
+  const card = ['debito', 'credito', 'credito_parc'].includes(p.forma), cred = p.forma === 'credito' || p.forma === 'credito_parc';
+  const cardBox = $('.pp-card', el), parcBox = $('.pp-parc', el);
+  cardBox.classList.toggle('open', card); $(':scope > .reveal-in', cardBox).inert = !card;
+  parcBox.classList.toggle('open', cred); $(':scope > .reveal-in', parcBox).inert = !cred;
+  mark('pp-forma', 'k', p.forma === 'credito_parc' ? 'credito' : p.forma);
+  mark('pp-maq', 'm', p.maquina);
+  mark('pp-np', 'p', p.forma === 'credito' ? p.parcelas : null);
+}
+// depois de escolher, Enter leva ao próximo passo: maquininha → parcelas → próxima forma → salvar
+function advance(p, from) {
+  if (from === 'forma' && (p.forma === 'debito' || p.forma === 'credito')) return focusGroup($('.pp-maq', p.el));
+  if (from === 'maq' && p.forma === 'credito') return focusGroup($('.pp-np', p.el));
+  if (!p.forma) return focusGroup($('.pp-forma', p.el));
+  const nx = parts[parts.indexOf(p) + 1];
+  if (nx) { const v = $('.pp-val input', nx.el); return v.readOnly ? focusGroup($('.pp-forma', nx.el)) : v.focus(); }
+  form.requestSubmit();
+}
+function layoutParts() {
+  const multi = parts.length > 1;
+  parts.forEach((p, i) => {
+    const last = i === parts.length - 1, box = $('.pp-val', p.el), inp = $('input', box);
+    p.el.classList.toggle('multi', multi);
+    box.classList.toggle('auto', multi && last);
+    inp.readOnly = multi && last; inp.tabIndex = multi && last ? -1 : 0;
+    inp.setAttribute('aria-label', multi && last ? 'Restante, calculado automaticamente' : `Valor pago nesta forma (${i + 1})`);
+    if (multi && !last) inp.value = p.valorTxt;
+  });
+  $('#f-split').hidden = parts.length >= 4;
+}
+function addPartEl(p, animate = true) { parts.push(p); if (!animate) p.el.style.animation = 'none'; $('#f-pags').appendChild(p.el); }
+// dividir: a forma que era a última passa a pedir valor; a nova fica com o restante
+function addPart() {
+  if (parts.length >= 4) return;
+  const prev = parts[parts.length - 1]; prev.valorTxt = '';
+  const p = makePart({}); addPartEl(p); layoutParts(); paintPart(p); updateTotals();
+  const inp = $('.pp-val input', prev.el); inp.value = ''; requestAnimationFrame(() => inp.focus());
+}
+function removePart(p) {
+  if (parts.length <= 1) return;
+  const i = parts.indexOf(p); parts.splice(i, 1);
+  const done = () => { p.el.remove(); layoutParts(); updateTotals(); focusGroup($('.pp-forma', parts[Math.min(i, parts.length - 1)].el)); };
+  if (reduce) done(); else p.el.animate([{ opacity: 1, transform: 'none' }, { opacity: 0, transform: 'scale(.98)' }], { duration: 140, easing: 'ease-in' }).onfinish = done;
+}
+function partValues(bruto) {
+  if (parts.length <= 1) return [bruto];
+  const v = parts.map(p => { const n = parseMoney(p.valorTxt); return n > 0 ? r2(n) : 0; });
+  v[v.length - 1] = r2(bruto - v.slice(0, -1).reduce((s, x) => s + x, 0));
+  return v;
+}
+function taxaLine(p, v, t, tx) {
+  if (!p.forma) return '';
+  if (p.forma === 'dinheiro' || p.forma === 'pix') return '<span class="dim">Sem taxa: entra 100% líquido</span>';
+  const nome = nomeMaq(p.maquina) || p.maquina_nome;
+  const det = p.forma === 'debito' ? 'débito' : p.forma === 'credito_parc' ? 'parcelado (nº de parcelas não informado)' : p.parcelas > 1 ? `crédito ${p.parcelas}x` : 'crédito à vista';
+  if (!nome && !p.fixa) return '<span class="cal">Escolha a maquininha</span>';
+  return `Taxa ${nome ? esc(nome) : '(maquininha não informada)'} · ${det}: <b>${N2.format(t)}%</b>${v > 0 ? ` · −${brl(tx)}` : ''}`
+    + (p.fixa ? ' <span class="dim">(taxa do lançamento original)</span>' : !settings.taxasConferidas ? ' · <span class="cal">confira as taxas em Ajustes</span>' : '');
+}
 function updateTotals() {
-  const b = sheetRows().reduce((s, r) => s + (r.vl > 0 ? r.vl : 0), 0); const t = curTaxa(); const tx = r2(b * t / 100);
-  $('#t-bruto').textContent = brl(b); $('#t-taxa').textContent = t ? `−${brl(tx)}` : '—';
-  setRoll($('#t-liq'), brl(b - tx), true);
+  const bruto = r2(sheetRows().reduce((s, r) => s + (r.vl > 0 ? r.vl : 0), 0));
+  const vals = partValues(bruto); let taxas = 0;
+  parts.forEach((p, i) => {
+    const v = vals[i], t = taxaPara(p), tx = v > 0 ? r2(v * t / 100) : 0; taxas += tx;
+    if (parts.length > 1 && i === parts.length - 1) {
+      const inp = $('.pp-val input', p.el); inp.value = v < 0 ? '−' + N2.format(-v) : N2.format(v); inp.classList.toggle('neg', bruto > 0 && v <= 0);
+    }
+    $('.pp-taxa', p.el).innerHTML = taxaLine(p, v, t, tx);
+  });
+  taxas = r2(taxas);
+  $('#t-bruto').textContent = brl(bruto); $('#t-taxa').textContent = taxas ? `−${brl(taxas)}` : '—';
+  setRoll($('#t-liq'), brl(bruto - taxas), true);
+  const st = $('#pay-status'), rest = vals[vals.length - 1];
+  if (parts.length < 2 || !(bruto > 0)) st.innerHTML = '';
+  else if (rest < 0) st.innerHTML = `<span class="bad">Os valores passam do total em ${brl(-rest)}.</span>`;
+  else if (rest === 0 && bruto > 0) st.innerHTML = '<span class="bad">A última forma ficou sem valor: ajuste os valores ou remova uma forma.</span>';
+  else st.innerHTML = `<span class="ok">✓</span> Dividido em ${parts.length} formas · ${vals.map(brl).join(' + ')} = ${brl(bruto)}`;
+}
+function snapshotAt(key) {
+  const es = (entsByAt.get(key) || []).slice().sort((a, b) => a.created_at - b.created_at);
+  return { data: es[0].data, medico: es[0].medico, exames: es.map(e => ({ id: e.id, exame: e.exame, valor: e.valor })),
+    pagamentos: (paysByAt.get(key) || []).map(p => ({ forma: p.forma, maquina: p.maquina, parcelas: p.parcelas, valor: p.valor, taxa: p.taxa })) };
 }
 function openSheet(opts = { mode: 'add' }) {
   if (!ov.hidden) return;
-  sheet = opts; lastFocus = document.activeElement; hideTip();
-  const edit = opts.mode === 'edit', e = opts.entry, dr = opts.draft;
-  if (edit && !e) return;
-  $('#sheet-t').textContent = edit ? 'Editar exame' : 'Novo atendimento';
-  $('#ex-lab').textContent = edit ? 'Exame' : 'Exames';
-  $('#f-add').hidden = edit; $('#f-del').hidden = !edit;
+  const edit = opts.mode === 'edit', dr = opts.draft;
+  const ents = edit ? (entsByAt.get(opts.key) || []).slice().sort((a, b) => a.created_at - b.created_at) : [];
+  if (edit && !ents.length) return;
+  sheet = { ...opts, before: edit ? snapshotAt(opts.key) : null };
+  lastFocus = document.activeElement; hideTip();
+  $('#sheet-t').textContent = edit ? (ents.length > 1 ? `Editar atendimento · ${ents.length} exames` : 'Editar atendimento') : 'Novo atendimento';
+  $('#f-del').hidden = !edit;
   $('#f-save').firstChild.textContent = edit ? 'Salvar alterações ' : 'Salvar ';
   $('#f-rows').innerHTML = ''; $('#ferr').textContent = '';
-  if (edit) addRow({ ex: e.exame, vl: N2.format(e.valor), focus: false });
-  else if (dr) dr.rows.forEach(r => addRow({ ex: r.ex, vl: r.vl > 0 ? N2.format(r.vl) : '', focus: false }));
+  if (edit) ents.forEach(e => addRow({ ex: e.exame, vl: N2.format(e.valor), id: e.id, focus: false }));
+  else if (dr) dr.exames.forEach(x => addRow({ ex: x.exame, vl: N2.format(x.valor), focus: false }));
   else addRow({ focus: false });
-  $$('#f-rows .x').forEach(x => { x.hidden = edit; });
-  $('#f-med').value = edit ? e.medico : dr ? dr.med : '';
-  $('#f-data').value = edit ? e.data : dr ? dr.data : todayISO();
+  $('#f-med').value = edit ? ents[0].medico : dr ? dr.medico : '';
+  $('#f-data').value = edit ? ents[0].data : dr ? dr.data : todayISO();
   $('#f-data').max = todayISO();
-  setRoll($('#t-liq'), brl(0), false);
-  setPay(edit ? (e.pagamento || '') : dr ? dr.pag : '');
-  if (dr && dr.taxa != null && $('#f-taxa')) $('#f-taxa').value = N2.format(dr.taxa);
-  updateTotals();
+  $('#f-pags').innerHTML = ''; parts = [];
+  const inits = edit ? partsOf(opts.key).map(p => ({ ...p, fixa: true })) : dr ? dr.pagamentos.map(p => ({ ...p, fixa: false })) : [];
+  if (!inits.length) inits.push({});
+  inits.forEach(i => addPartEl(makePart(i), false));
+  layoutParts(); setRoll($('#t-liq'), brl(0), false); updateTotals();
   ov.hidden = false; ov.classList.remove('out'); document.body.classList.add('sheet-open');
-  requestAnimationFrame(() => { ov.classList.add('on'); slide($('#pay'), '[aria-checked="true"]'); const f = $('#f-rows [name=ex]'); f.focus(); if (edit) f.select(); });
+  requestAnimationFrame(() => {
+    ov.classList.add('on'); parts.forEach(p => paintPart(p));
+    const f = $('#f-rows [name=ex]'); f.focus(); if (edit) f.select();
+  });
 }
 function closeSheet() {
   if (ov.hidden || ov.classList.contains('out')) return;
@@ -703,13 +922,15 @@ function closeSheet() {
 }
 $('#open-sheet').addEventListener('click', () => openSheet());
 $('#f-add').addEventListener('click', () => addRow());
-$('#f-del').addEventListener('click', () => { const id = sheet.entry.id; closeSheet(); deleteEntries([id]); });
+$('#f-split').addEventListener('click', () => addPart());
+$('#f-del').addEventListener('click', () => { const k = sheet.key; closeSheet(); deleteAtendimento(k); });
 ov.addEventListener('mousedown', e => { if (e.target === ov) closeSheet(); });
 form.addEventListener('keydown', e => {
   if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); form.requestSubmit(); return; }
-  if (e.altKey && (e.key === '+' || e.key === '=') && sheet.mode === 'add') { e.preventDefault(); addRow(); return; }
+  if (e.altKey && (e.key === '+' || e.key === '=')) { e.preventDefault(); addRow(); return; }
+  if (e.altKey && (e.key === 'd' || e.key === 'D' || e.code === 'KeyD')) { e.preventDefault(); addPart(); return; }
   if (e.key === 'Tab') { // mantém o foco dentro da folha
-    const f = $$('#sheet input, #sheet button').filter(x => x.offsetParent && x.tabIndex >= 0 && !x.disabled);
+    const f = $$('#sheet input, #sheet button').filter(x => x.offsetParent && x.tabIndex >= 0 && !x.disabled && !x.closest('[inert]'));
     const i = f.indexOf(document.activeElement);
     if (e.shiftKey && i === 0) { e.preventDefault(); f[f.length - 1].focus(); }
     else if (!e.shiftKey && i === f.length - 1) { e.preventDefault(); f[0].focus(); }
@@ -727,7 +948,7 @@ form.addEventListener('keydown', e => {
 form.addEventListener('submit', async e => {
   e.preventDefault(); const err = $('#ferr'); err.textContent = '';
   const rs = sheetRows().filter(r => r.ex || r.vl), med = $('#f-med').value.trim(), day = $('#f-data').value;
-  const fail = (m, el) => { err.textContent = m; if (el) { el.classList.add('err'); el.focus(); if (!reduce) el.animate([{ transform: 'translateX(0)' }, { transform: 'translateX(-5px)' }, { transform: 'translateX(4px)' }, { transform: 'translateX(-2px)' }, { transform: 'translateX(0)' }], { duration: 260, easing: 'ease-out' }); } };
+  const fail = (m, el) => { err.textContent = m; if (el) { el.classList.add('err'); const f = el.matches('input,button') ? el : el.querySelector('[tabindex="0"]') || el.querySelector('button'); if (f) f.focus(); if (!reduce) el.animate([{ transform: 'translateX(0)' }, { transform: 'translateX(-5px)' }, { transform: 'translateX(4px)' }, { transform: 'translateX(-2px)' }, { transform: 'translateX(0)' }], { duration: 260, easing: 'ease-out' }); } };
   if (!day) return fail('Informe a data.', $('#f-data'));
   if (day > todayISO()) return fail('A data não pode ser no futuro.', $('#f-data'));
   if (!rs.length) return fail('Informe ao menos um exame.', $('#f-rows [name=ex]'));
@@ -737,52 +958,72 @@ form.addEventListener('submit', async e => {
   }
   if (!med) return fail('Informe o médico solicitante.', $('#f-med'));
   const edit = sheet.mode === 'edit';
-  if (!payVal && !(edit && !sheet.entry.pagamento)) { $('#pay').classList.add('err'); return fail('Escolha a forma de pagamento.', $('#pay button[tabindex="0"]')); }
-  const taxa = curTaxa();
-  if (edit) return saveEdit(sheet.entry, { exame: rs[0].ex, valor: rs[0].vl, data: day, medico: med, pagamento: payVal || null, taxa });
-  saveNew({ rows: rs.map(r => ({ ex: r.ex, vl: r.vl })), med, data: day, pag: payVal, taxa });
+  const bruto = r2(rs.reduce((s, r) => s + r.vl, 0)), vals = partValues(bruto);
+  // lançamento antigo sem forma de pagamento pode continuar "não informado"
+  const semPag = edit && parts.length === 1 && !parts[0].forma && !(paysByAt.get(sheet.key) || []).length;
+  if (!semPag) {
+    for (const [i, p] of parts.entries()) {
+      const qual = parts.length > 1 ? ` da forma ${i + 1}` : '';
+      if (!p.forma) return fail(`Escolha a forma de pagamento${qual}.`, $('.pp-forma', p.el));
+      if ((p.forma === 'debito' || p.forma === 'credito') && !p.maquina && !p.fixa) return fail(`Escolha a maquininha${qual}.`, $('.pp-maq', p.el));
+      if (parts.length > 1 && !(vals[i] > 0)) return fail(i === parts.length - 1 ? 'A última forma ficou sem valor: ajuste os valores ou remova uma forma.' : `Informe o valor pago na forma ${i + 1}.`, $('.pp-val input', (i === parts.length - 1 ? parts[i - 1] : p).el));
+    }
+  }
+  const pagamentos = semPag ? [] : parts.map((p, i) => ({ forma: p.forma, maquina: CARTOES.includes(p.forma) ? (p.maquina || null) : null,
+    parcelas: p.forma === 'credito' ? (p.parcelas || 1) : null, valor: vals[i], taxa: taxaPara(p) }));
+  const body = { data: day, medico: med, exames: rs.map(r => ({ id: r.id || undefined, exame: r.ex, valor: r2(r.vl) })), pagamentos };
+  if (edit) return saveEdit(sheet.key, body);
+  saveNew(body);
 });
+const comNomes = ps => ps.map(p => ({ ...p, maquina_nome: nomeMaq(p.maquina) || p.maquina_nome || null }));
+function taxaEfetiva(body) { const b = body.exames.reduce((s, x) => s + x.valor, 0); return b ? body.pagamentos.reduce((s, p) => s + p.valor * p.taxa, 0) / b : 0; }
 // salvar é otimista: a folha fecha na hora e a linha aparece pendente até o servidor confirmar
-async function saveNew(draft) {
+async function saveNew(body) {
   closeSheet();
-  const temps = draft.rows.map((r, i) => ({ id: 'tmp' + Date.now() + i, exame: r.ex, proc: /mamografia/i.test(r.ex) ? 'MG' : 'US', valor: r2(r.vl), data: draft.data, medico: draft.med, pagamento: draft.pag, taxa: CARTOES.includes(draft.pag) ? draft.taxa : 0, created_at: Date.now() + i, pending: true }));
-  entries.push(...temps);
-  if (!draft.data.startsWith(route.ym) || route.page !== 'mes') { history.replaceState(null, '', '#/mes/' + draft.data.slice(0, 7)); applyRoute(); }
+  const tk = 'tmp' + Date.now(), te = taxaEfetiva(body);
+  const temps = body.exames.map((x, i) => ({ id: tk + 'e' + i, atendimento: tk, exame: x.exame, proc: procOf(x.exame), valor: x.valor, data: body.data, medico: body.medico,
+    pagamento: body.pagamentos.length > 1 ? 'misto' : body.pagamentos[0].forma, taxa: te, created_at: Date.now() + i, pending: true }));
+  const tps = comNomes(body.pagamentos).map((p, i) => ({ ...p, atendimento: tk, ordem: i }));
+  entries.push(...temps); pagamentos.push(...tps); indexar();
+  if (!body.data.startsWith(route.ym) || route.page !== 'mes') { history.replaceState(null, '', '#/mes/' + body.data.slice(0, 7)); applyRoute(); }
   else renderMes(0, { sweepIt: false });
   try {
-    const r = await api('POST', '/api/entries', temps.map(t => ({ exame: t.exame, valor: t.valor, data: t.data, medico: t.medico, pagamento: t.pagamento, taxa: t.taxa })));
+    const r = await api('POST', '/api/atendimentos', body);
     await loadEntries(); r.ids.forEach(id => fresh.add(id)); refresh();
     const b = temps.reduce((s, i) => s + i.valor, 0), l = temps.reduce((s, i) => s + liq(i), 0);
-    toast(`Atendimento salvo · ${plural(temps.length, 'exame')}`, `${brl(b)} → líquido ${brl(l)}`, async () => { await api('POST', '/api/entries/delete', { ids: r.ids }); await loadEntries(); refresh(); });
+    toast(`Atendimento salvo · ${plural(temps.length, 'exame')}`, `${brl(b)} → líquido ${brl(l)} · ${paySummary(tps)}`,
+      async () => { await api('POST', '/api/atendimentos/delete', { keys: [r.atendimento] }); await loadEntries(); refresh(); });
   } catch (x) {
-    entries = entries.filter(e => !temps.includes(e)); refresh();
-    toast('Não foi possível salvar', x.message, () => openSheet({ mode: 'add', draft }), { error: true, label: 'Reabrir' });
+    entries = entries.filter(e => !temps.includes(e)); pagamentos = pagamentos.filter(p => !tps.includes(p)); indexar(); refresh();
+    toast('Não foi possível salvar', x.message, () => openSheet({ mode: 'add', draft: body }), { error: true, label: 'Reabrir' });
   }
 }
-async function saveEdit(entry, body) {
+async function saveEdit(key, body) {
   closeSheet();
-  const before = { exame: entry.exame, valor: entry.valor, data: entry.data, medico: entry.medico, pagamento: entry.pagamento, taxa: entry.taxa };
+  const before = sheet.before;
   try {
-    await api('PUT', '/api/entries/' + encodeURIComponent(entry.id), body);
-    await loadEntries(); fresh.add(entry.id);
+    const r = await api('PUT', '/api/atendimentos/' + encodeURIComponent(key), body);
+    await loadEntries(); r.ids.forEach(id => fresh.add(id));
     if (!body.data.startsWith(route.ym) && route.page === 'mes') { history.replaceState(null, '', '#/mes/' + body.data.slice(0, 7)); applyRoute(); } else refresh();
-    toast('Alterações salvas', body.exame, async () => { await api('PUT', '/api/entries/' + encodeURIComponent(entry.id), before); await loadEntries(); refresh(); });
-  } catch (x) { toast('Não foi possível salvar', x.message, () => openSheet({ mode: 'edit', entry }), { error: true, label: 'Reabrir' }); }
+    toast('Alterações salvas', `${plural(body.exames.length, 'exame')} · ${paySummary(comNomes(body.pagamentos))}`,
+      async () => { await api('PUT', '/api/atendimentos/' + encodeURIComponent(key), before); await loadEntries(); refresh(); });
+  } catch (x) { toast('Não foi possível salvar', x.message, () => openSheet({ mode: 'edit', key }), { error: true, label: 'Reabrir' }); }
 }
-async function deleteEntries(ids) {
-  const items = entries.filter(e => ids.includes(e.id)); if (!items.length) return;
-  // foco vai para a próxima linha (navegação por teclado continua)
-  const rows = $$('#wl .r'); const cur = rows.find(r => r.dataset.id === ids[0]); const next = cur && (rows[rows.indexOf(cur) + 1] || rows[rows.indexOf(cur) - 1]);
-  if (cur) { cur.style.height = cur.offsetHeight + 'px'; void cur.offsetHeight; cur.classList.add('gone'); }
+// excluir apaga o atendimento inteiro (exames + pagamentos), com Desfazer
+async function deleteAtendimento(key) {
+  const items = entsByAt.get(key) || []; if (!items.length) return;
+  const rows = $$('#wl .r'), mine = rows.filter(r => r.dataset.at === key), i0 = rows.indexOf(mine[0]);
+  const next = i0 < 0 ? null : (rows.slice(i0).find(r => !mine.includes(r)) || rows.slice(0, i0).reverse().find(r => !mine.includes(r)));
+  mine.forEach(r => { r.style.height = r.offsetHeight + 'px'; void r.offsetHeight; r.classList.add('gone'); });
   const nextId = next && next.dataset.id;
   setTimeout(() => {
-    entries = entries.filter(e => !ids.includes(e.id)); refresh();
+    entries = entries.filter(e => atKey(e) !== key); pagamentos = pagamentos.filter(p => p.atendimento !== key); indexar(); refresh();
     if (nextId) { const n = $(`#wl .r[data-id="${CSS.escape(nextId)}"]`); if (n) n.focus({ preventScroll: true }); }
-  }, reduce || !cur ? 0 : 240);
+  }, reduce || !mine.length ? 0 : 240);
   try {
-    await api('POST', '/api/entries/delete', { ids });
-    toast(`Excluído: ${items[0].exame}${items.length > 1 ? ` e mais ${items.length - 1}` : ''}`, brl(items.reduce((s, e) => s + e.valor, 0)),
-      async () => { await api('POST', '/api/entries/restore', { ids }); await loadEntries(); ids.forEach(id => fresh.add(id)); refresh(); });
+    await api('POST', '/api/atendimentos/delete', { keys: [key] });
+    toast(items.length > 1 ? `Atendimento excluído · ${items.length} exames` : `Excluído: ${items[0].exame}`, brl(items.reduce((s, e) => s + e.valor, 0)),
+      async () => { await api('POST', '/api/atendimentos/restore', { keys: [key] }); await loadEntries(); items.forEach(e => fresh.add(e.id)); refresh(); });
   } catch (x) { await loadEntries().catch(() => {}); refresh(); toast('Não foi possível excluir', x.message, null, { error: true }); }
 }
 function refresh() { if (route.page === 'mes') renderMes(0, { sweepIt: false }); else if (route.page === 'ano') renderAno(); }
@@ -920,7 +1161,7 @@ $('#login-form').addEventListener('submit', async ev => {
 function tick() { const d = new Date(); $('#clock').textContent = `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`; }
 let rz; addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => {
   if (!$('#login').hidden) drawLoginFan(1);
-  slide($('.tabs'), '[aria-selected="true"]'); slide($('#rk-seg'), '[aria-pressed="true"]'); slide($('#pay'), '[aria-checked="true"]');
+  slide($('.tabs'), '[aria-selected="true"]'); slide($('#rk-seg'), '[aria-pressed="true"]'); if (!ov.hidden) parts.forEach(p => paintPart(p));
   if (route.page === 'mes') { drawFan(); drawDop($('#dop'), +route.ym.slice(0, 4)); renderCine(); }
   if (route.page === 'ano') drawDop($('#dop2'), route.y);
 }, 100); });

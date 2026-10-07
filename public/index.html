@@ -74,6 +74,7 @@
         </div>
         <div class="meas" id="meas"></div>
         <div class="mix"><div class="eyebrow">Formas de pagamento</div><div class="lst" id="mix"></div></div>
+        <div class="mix" id="maqs-box" hidden><div class="eyebrow">Maquininhas</div><div class="lst" id="maqs"></div></div>
       </aside>
     </div>
 
@@ -90,7 +91,8 @@
           <label class="search"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="7" cy="7" r="5"/><path d="M11 11l3.5 3.5"/></svg>
             <input id="q" placeholder="Buscar exame ou médico" autocomplete="off" aria-label="Buscar exame ou médico"><kbd>/</kbd></label>
           <span id="chips" class="chips"></span>
-          <a class="ghostbtn press" id="exp-mes" data-tip="Baixar planilha do mês (Excel)">CSV</a>
+          <a class="ghostbtn press" id="exp-mes" data-tip="Planilha de exames do mês (Excel)">CSV</a>
+          <a class="ghostbtn press" id="exp-pag" data-tip="Planilha de pagamentos do mês, para conferir com as maquininhas">Pagamentos</a>
         </div>
         <div class="wl" id="wl" role="list"></div>
         <div class="wl-foot" id="wl-foot"></div>
@@ -124,11 +126,11 @@
   <!-- AJUSTES -->
   <section id="v-ajustes" hidden>
     <div class="settings">
-      <form class="card" id="taxas-form" novalidate>
-        <div class="ch"><h2>Taxas da maquininha</h2><span class="badge" id="taxas-badge" hidden>confira</span></div>
+      <form class="card span2" id="taxas-form" novalidate>
+        <div class="ch"><h2>Maquininhas e taxas</h2><span class="badge" id="taxas-badge" hidden>confira</span><span class="dim">% descontado de cada venda, por parcela</span></div>
         <div class="bd">
-          <div class="taxgrid" id="taxgrid"></div>
-          <p class="dim">Dinheiro e PIX entram 100% líquidos. Cada lançamento guarda a taxa do dia em que foi feito; mudar aqui vale para os próximos.</p>
+          <div class="tblwrap"><table class="taxmat" id="taxmat"></table></div>
+          <p class="dim">Dinheiro e PIX entram 100% líquidos. Cada pagamento guarda a taxa do dia em que foi lançado; mudar aqui vale para os próximos. Dica: <kbd>↑</kbd> <kbd>↓</kbd> ajustam 0,01 (com <kbd>Shift</kbd>, 0,10).</p>
           <div class="row-end"><span class="ferr" id="taxas-err" role="alert"></span><button class="btn-solid press" type="submit" id="taxas-save">Salvar taxas</button></div>
         </div>
       </form>
@@ -138,7 +140,8 @@
           <p id="backup-status" class="dim">Verificando…</p>
           <div class="btns">
             <a class="ghostbtn press" href="/api/backup" download>Baixar cópia do banco (.db)</a>
-            <a class="ghostbtn press" href="/api/export.csv?nome=ganhos-todos" download>Exportar tudo (CSV)</a>
+            <a class="ghostbtn press" href="/api/export.csv?nome=ganhos-todos" download>Exportar exames (CSV)</a>
+            <a class="ghostbtn press" href="/api/export-pagamentos.csv?nome=pagamentos-todos" download>Exportar pagamentos (CSV)</a>
           </div>
           <p class="dim">O servidor guarda uma cópia por dia (últimas 30), no mesmo VPS. Uma vez por mês, baixe a cópia do banco e guarde fora.</p>
         </div>
@@ -182,9 +185,10 @@
       <div><span class="fl-lab" id="ex-lab">Exames</span><div id="f-rows"></div>
         <button type="button" class="addex press" id="f-add">+ Outro exame no mesmo atendimento <kbd>Alt</kbd><kbd>+</kbd></button></div>
       <div><label class="fl-lab" for="f-med">Médico solicitante</label><div class="cb"><input class="inp" id="f-med" placeholder="Nome do médico" role="combobox" aria-expanded="false" aria-autocomplete="list"></div></div>
-      <div><span class="fl-lab" id="pay-l">Pagamento <span class="dim">· ← → ou 1–5</span></span>
-        <div class="pay" id="pay" role="radiogroup" aria-labelledby="pay-l"></div>
-        <div class="taxa" id="taxa"></div></div>
+      <div><div class="pay-head"><span class="fl-lab" id="pay-l">Pagamento <span class="dim">· ← → ou números · Enter avança</span></span>
+          <button type="button" class="addex press" id="f-split">+ Dividir pagamento <kbd>Alt</kbd><kbd>D</kbd></button></div>
+        <div class="pparts" id="f-pags" role="group" aria-labelledby="pay-l"></div>
+        <div class="pay-status" id="pay-status" aria-live="polite"></div></div>
       <div class="ferr" id="ferr" role="alert"></div>
     </div>
     <div class="sf">
