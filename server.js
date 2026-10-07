@@ -66,9 +66,9 @@ addCol('deleted_at', 'INTEGER');               // lixeira
 addCol('updated_at', 'INTEGER');
 db.exec('CREATE INDEX IF NOT EXISTS idx_entries_data ON entries(data)');
 
-const PAGAMENTOS = ['dinheiro', 'pix', 'debito', 'credito', 'credito_parc'];
+const PAGAMENTOS = ['dinheiro', 'pix', 'debito', 'credito', 'credito_parc'];   // credito_parc = legado (sem nº de parcelas)
 const CARTOES = ['debito', 'credito', 'credito_parc'];
-const TAXAS_PADRAO = { debito: 1.5, credito: 3.5, credito_parc: 5.0 };
+const MAX_PARCELAS = 12;
 
 function getSetting(key, fallback) {
   const r = db.prepare('SELECT value FROM settings WHERE key=?').get(key);
@@ -212,6 +212,134 @@ function clean(e, { permitirSemPagamento = false } = {}) {
 
 const COLS = 'id,exame,proc,valor,data,medico,pagamento,taxa,atendimento,created_at';
 const novoId = () => 'e' + Date.now().toString(36) + crypto.randomBytes(4).toString('hex');
+const num2 = n => n.toFixed(2).replace('.', ',');
+
+/* ---------- maquininhas (cada unidade da clínica tem a sua, com taxas próprias) ---------- */
+const MAQ_PADRAO = [{ id: 'ecos1', nome: 'ECOS I' }, { id: 'ecos2', nome: 'ECOS II' }];
+const CREDITO_PADRAO = [3.5, 4.9, 5.6, 6.3, 7.0, 7.6, 8.3, 8.9, 9.5, 10.1, 10.7, 11.3];   // 1x (à vista) .. 12x
+function getMaquinas() {
+  let m = getSetting('maquinas', null);
+  if (!Array.isArray(m) || !m.length) {
+    // primeira vez: parte das taxas únicas da versão anterior, se existirem
+    const old = getSetting('taxas', null) || {};
+    m = MAQ_PADRAO.map(x => ({
+      id: x.id, nome: x.nome,
+      debito: old.debito != null ? old.debito : 1.5,
+      credito: CREDITO_PADRAO.map((v, i) => i === 0 ? (old.credito != null ? old.credito : v) : (old.credito_parc != null ? old.credito_parc : v)),
+    }));
+    setSetting('maquinas', m);
+    setSetting('taxasConferidas', false);   // tabela nova, por parcela: pede conferência
+  }
+  return m;
+}
+function taxaTabela(maqs, forma, maquina, parcelas) {
+  const m = maqs.find(x => x.id === maquina);
+  if (!m) return 0;
+  if (forma === 'debito') return m.debito || 0;
+  if (forma === 'credito') return m.credito[Math.min(MAX_PARCELAS, Math.max(1, parcelas || 1)) - 1] || 0;
+  return 0;
+}
+getMaquinas();
+
+/* ---------- pagamentos: pertencem ao atendimento e podem ser divididos ---------- */
+db.exec(`CREATE TABLE IF NOT EXISTS pagamentos(
+  id           TEXT PRIMARY KEY,
+  atendimento  TEXT NOT NULL,
+  forma        TEXT NOT NULL,
+  maquina      TEXT,
+  maquina_nome TEXT,
+  parcelas     INTEGER,
+  valor        REAL NOT NULL,
+  taxa         REAL NOT NULL DEFAULT 0,
+  ordem        INTEGER NOT NULL DEFAULT 0,
+  created_at   INTEGER NOT NULL,
+  deleted_at   INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_pag_atendimento ON pagamentos(atendimento);`);
+const novoPagId = () => 'p' + Date.now().toString(36) + crypto.randomBytes(4).toString('hex');
+const insPagamento = db.prepare('INSERT INTO pagamentos(id,atendimento,forma,maquina,maquina_nome,parcelas,valor,taxa,ordem,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)');
+const insEntry = db.prepare(`INSERT INTO entries(id,exame,proc,valor,data,medico,pagamento,taxa,atendimento,created_at,updated_at)
+                             VALUES(?,?,?,?,?,?,?,?,?,?,?)`);
+const WHERE_AT = '(atendimento=? OR (atendimento IS NULL AND id=?))';
+function gravarPagamentos(key, pagamentos, now) {
+  db.prepare('DELETE FROM pagamentos WHERE atendimento=?').run(key);
+  pagamentos.forEach((p, i) => insPagamento.run(novoPagId(), key, p.forma, p.maquina, p.maquina_nome, p.parcelas, p.valor, p.taxa, i, now));
+}
+// migração: lançamentos da versão anterior (pagamento no exame) ganham registro de pagamento
+if (!getSetting('migr_pagamentos_v1', false)) {
+  const rows = db.prepare('SELECT id,atendimento,pagamento,taxa,valor,created_at FROM entries WHERE pagamento IS NOT NULL AND deleted_at IS NULL').all();
+  const comPag = new Set(db.prepare('SELECT DISTINCT atendimento FROM pagamentos').all().map(r => r.atendimento));
+  const grupos = new Map();
+  for (const r of rows) {
+    const k = r.atendimento || r.id; if (comPag.has(k)) continue;
+    if (!grupos.has(k)) grupos.set(k, new Map());
+    const g = grupos.get(k), gk = r.pagamento + '|' + (r.taxa || 0);
+    const pg = g.get(gk) || { forma: r.pagamento, taxa: r.taxa || 0, valor: 0, created_at: r.created_at };
+    pg.valor = round2(pg.valor + r.valor); g.set(gk, pg);
+  }
+  db.transaction(() => {
+    db.prepare('UPDATE entries SET atendimento=id WHERE atendimento IS NULL AND pagamento IS NOT NULL').run();
+    for (const [k, g] of grupos) [...g.values()].forEach((pg, i) =>
+      insPagamento.run(novoPagId(), k, pg.forma, null, null, pg.forma === 'credito' ? 1 : null, pg.valor, pg.taxa, i, pg.created_at));
+  })();
+  setSetting('migr_pagamentos_v1', true);
+}
+
+// valida um atendimento inteiro: exames + formas de pagamento (que precisam somar o total)
+function cleanAtendimento(b, { novo }) {
+  if (!b || typeof b !== 'object') return { erro: 'dados inválidos' };
+  const medico = String(b.medico || '').trim().slice(0, 120);
+  if (!validDate(b.data)) return { erro: 'data inválida' };
+  if (!medico) return { erro: 'informe o médico solicitante' };
+  const exs = Array.isArray(b.exames) ? b.exames : [];
+  if (!exs.length || exs.length > 20) return { erro: 'informe de 1 a 20 exames' };
+  const exames = [];
+  for (const x of exs) {
+    const exame = String((x && x.exame) || '').trim().slice(0, 160), valor = round2(Number(x && x.valor));
+    if (!exame) return { erro: 'informe o nome do exame' };
+    if (!(valor > 0 && valor < 1e6)) return { erro: `valor inválido para "${exame}"` };
+    const id = x && typeof x.id === 'string' && /^e[0-9a-z]{6,40}$/.test(x.id) ? x.id : null;
+    exames.push({ id, exame, proc: procOf(exame), valor });
+  }
+  const bruto = round2(exames.reduce((s, x) => s + x.valor, 0));
+  const pgs = Array.isArray(b.pagamentos) ? b.pagamentos : [];
+  if (!pgs.length && novo) return { erro: 'informe a forma de pagamento' };
+  if (pgs.length > 4) return { erro: 'no máximo 4 formas de pagamento por atendimento' };
+  const maqs = getMaquinas(), pagamentos = [];
+  for (const pg of pgs) {
+    const forma = String((pg && pg.forma) || '');
+    if (!PAGAMENTOS.includes(forma) || (novo && forma === 'credito_parc')) return { erro: 'forma de pagamento inválida' };
+    const valor = round2(Number(pg.valor));
+    if (!(valor > 0)) return { erro: 'valor de pagamento inválido' };
+    let maquina = null, maquina_nome = null, parcelas = null, taxa = 0;
+    if (forma === 'debito' || forma === 'credito') {
+      if (pg.maquina != null && pg.maquina !== '') {
+        const m = maqs.find(x => x.id === pg.maquina);
+        if (!m) return { erro: 'maquininha inválida' };
+        maquina = m.id; maquina_nome = m.nome;
+      } else if (novo) return { erro: 'escolha a maquininha' };
+      if (forma === 'credito') {
+        if (pg.parcelas != null && pg.parcelas !== '') {
+          parcelas = Number(pg.parcelas);
+          if (!Number.isInteger(parcelas) || parcelas < 1 || parcelas > MAX_PARCELAS) return { erro: 'número de parcelas inválido' };
+        } else if (novo) return { erro: 'informe o número de parcelas' };
+      }
+    }
+    if (CARTOES.includes(forma)) {
+      taxa = pg.taxa != null && pg.taxa !== '' ? Math.round(Number(pg.taxa) * 100) / 100 : taxaTabela(maqs, forma, maquina, parcelas);
+      if (!(taxa >= 0 && taxa <= 30)) return { erro: 'taxa inválida (0 a 30%)' };
+    }
+    pagamentos.push({ forma, maquina, maquina_nome, parcelas, valor, taxa });
+  }
+  if (pagamentos.length) {
+    const soma = round2(pagamentos.reduce((s, x) => s + x.valor, 0));
+    if (Math.abs(soma - bruto) > 0.011) return { erro: `a soma dos pagamentos (R$ ${num2(soma)}) não confere com o total dos exames (R$ ${num2(bruto)})` };
+  }
+  // cada exame guarda a taxa efetiva do atendimento: a soma dos líquidos dos exames = líquido real
+  const taxaEf = pagamentos.length ? Math.round(pagamentos.reduce((s, x) => s + x.valor * x.taxa, 0) / bruto * 10000) / 10000 : 0;
+  const resumo = !pagamentos.length ? null : pagamentos.length === 1 ? pagamentos[0].forma : 'misto';
+  return { data: b.data, medico, exames, pagamentos, taxaEf, resumo };
+}
 
 /* ---------- lançamentos ---------- */
 app.get('/api/entries', auth, (req, res) => {
@@ -251,7 +379,64 @@ app.put('/api/entries/:id', auth, (req, res) => {
   agendarMarco();
 });
 
-// excluir = mandar para a lixeira (dá para desfazer)
+/* ---------- atendimentos ---------- */
+const chaveAt = k => typeof k === 'string' && /^[ae][0-9a-z]{4,40}$/.test(k) ? k : null;
+app.get('/api/pagamentos', auth, (req, res) => {
+  res.json(db.prepare('SELECT id,atendimento,forma,maquina,maquina_nome,parcelas,valor,taxa,ordem FROM pagamentos WHERE deleted_at IS NULL ORDER BY atendimento, ordem').all());
+});
+app.post('/api/atendimentos', auth, (req, res) => {
+  const a = cleanAtendimento(req.body, { novo: true });
+  if (a.erro) return res.status(400).json({ error: a.erro });
+  const key = 'a' + Date.now().toString(36) + crypto.randomBytes(3).toString('hex');
+  const now = Date.now(), ids = [];
+  db.transaction(() => {
+    a.exames.forEach((x, j) => { const id = novoId(); insEntry.run(id, x.exame, x.proc, x.valor, a.data, a.medico, a.resumo, a.taxaEf, key, now + j, now); ids.push(id); });
+    gravarPagamentos(key, a.pagamentos, now);
+  })();
+  res.json({ ok: true, atendimento: key, ids });
+  agendarMarco();
+});
+// edita o atendimento inteiro: exames (inclui, altera, remove), data, médico e pagamentos
+app.put('/api/atendimentos/:key', auth, (req, res) => {
+  const key = chaveAt(req.params.key);
+  const atuais = key ? db.prepare(`SELECT id FROM entries WHERE deleted_at IS NULL AND ${WHERE_AT}`).all(key, key).map(r => r.id) : [];
+  if (!atuais.length) return res.status(404).json({ error: 'atendimento não encontrado' });
+  const a = cleanAtendimento(req.body, { novo: false });
+  if (a.erro) return res.status(400).json({ error: a.erro });
+  const now = Date.now(), ativos = new Set(atuais), manter = new Set(), ids = [];
+  const upd = db.prepare('UPDATE entries SET exame=?,proc=?,valor=?,data=?,medico=?,pagamento=?,taxa=?,atendimento=?,updated_at=? WHERE id=?');
+  const existe = db.prepare('SELECT 1 FROM entries WHERE id=?');
+  db.transaction(() => {
+    a.exames.forEach((x, j) => {
+      if (x.id && ativos.has(x.id)) upd.run(x.exame, x.proc, x.valor, a.data, a.medico, a.resumo, a.taxaEf, key, now, x.id);
+      else { x.id = x.id && !existe.get(x.id) ? x.id : novoId(); insEntry.run(x.id, x.exame, x.proc, x.valor, a.data, a.medico, a.resumo, a.taxaEf, key, now + j, now); }
+      manter.add(x.id); ids.push(x.id);
+    });
+    for (const id of ativos) if (!manter.has(id)) db.prepare('DELETE FROM entries WHERE id=?').run(id);   // o "Desfazer" regrava com o mesmo id
+    gravarPagamentos(key, a.pagamentos, now);
+  })();
+  res.json({ ok: true, ids });
+  agendarMarco();
+});
+const listaChaves = b => Array.isArray(b && b.keys) ? b.keys.map(chaveAt).filter(Boolean).slice(0, 50) : [];
+app.post('/api/atendimentos/delete', auth, (req, res) => {
+  const keys = listaChaves(req.body), now = Date.now();
+  const de = db.prepare(`UPDATE entries SET deleted_at=? WHERE deleted_at IS NULL AND ${WHERE_AT}`);
+  const dp = db.prepare('UPDATE pagamentos SET deleted_at=? WHERE deleted_at IS NULL AND atendimento=?');
+  db.transaction(() => keys.forEach(k => { de.run(now, k, k); dp.run(now, k); }))();
+  res.json({ ok: true });
+});
+app.post('/api/atendimentos/restore', auth, (req, res) => {
+  const keys = listaChaves(req.body);
+  const ult = db.prepare(`SELECT MAX(deleted_at) t FROM entries WHERE ${WHERE_AT}`);
+  const re = db.prepare(`UPDATE entries SET deleted_at=NULL WHERE deleted_at=? AND ${WHERE_AT}`);
+  const rp = db.prepare('UPDATE pagamentos SET deleted_at=NULL WHERE deleted_at=? AND atendimento=?');
+  db.transaction(() => keys.forEach(k => { const t = ult.get(k, k).t; if (t) { re.run(t, k, k); rp.run(t, k); } }))();
+  res.json({ ok: true });
+  agendarMarco();
+});
+
+// excluir = mandar para a lixeira (dá para desfazer) — rotas por exame mantidas por compatibilidade
 app.post('/api/entries/delete', auth, (req, res) => {
   const ids = Array.isArray(req.body && req.body.ids) ? req.body.ids.map(String).slice(0, 50) : [];
   const st = db.prepare('UPDATE entries SET deleted_at=? WHERE id=? AND deleted_at IS NULL');
@@ -270,47 +455,77 @@ app.get('/api/trash', auth, (req, res) => {
   res.json(db.prepare(`SELECT ${COLS},deleted_at FROM entries WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC`).all());
 });
 
-/* ---------- ajustes (taxas da maquininha) ---------- */
+/* ---------- ajustes: maquininhas e taxas ---------- */
 app.get('/api/settings', auth, (req, res) => {
-  res.json({ taxas: getSetting('taxas', TAXAS_PADRAO), taxasConferidas: getSetting('taxasConferidas', false) });
+  res.json({ maquinas: getMaquinas(), taxasConferidas: getSetting('taxasConferidas', false), maxParcelas: MAX_PARCELAS });
 });
 app.put('/api/settings', auth, (req, res) => {
-  const t = (req.body && req.body.taxas) || {};
-  const taxas = {};
-  for (const k of CARTOES) {
-    const v = round2(Number(t[k]));
-    if (!(v >= 0 && v <= 30)) return res.status(400).json({ error: 'taxa inválida (0 a 30%)' });
-    taxas[k] = v;
+  const recebidas = req.body && Array.isArray(req.body.maquinas) ? req.body.maquinas : null;
+  if (!recebidas) return res.status(400).json({ error: 'dados inválidos' });
+  const novas = [];
+  for (const m of getMaquinas()) {
+    const r = recebidas.find(x => x && x.id === m.id) || {};
+    const nome = String(r.nome == null ? m.nome : r.nome).trim().slice(0, 30);
+    if (!nome) return res.status(400).json({ error: 'dê um nome para cada maquininha' });
+    const val = (v, ant) => v == null || v === '' ? ant : Math.round(Number(v) * 100) / 100;
+    const debito = val(r.debito, m.debito);
+    const credito = Array.from({ length: MAX_PARCELAS }, (_, k) => val(Array.isArray(r.credito) ? r.credito[k] : undefined, m.credito[k]));
+    if (![debito, ...credito].every(v => v >= 0 && v <= 30)) return res.status(400).json({ error: `taxa inválida na ${nome} (use de 0 a 30%)` });
+    novas.push({ id: m.id, nome, debito, credito });
   }
-  setSetting('taxas', taxas); setSetting('taxasConferidas', true);
+  setSetting('maquinas', novas); setSetting('taxasConferidas', true);
   res.json({ ok: true });
 });
 
 /* ---------- exportar CSV (abre no Excel) ---------- */
-const NOME_PAG = { dinheiro: 'Dinheiro', pix: 'PIX', debito: 'Débito', credito: 'Crédito à vista', credito_parc: 'Crédito parcelado' };
-app.get('/api/export.csv', auth, (req, res) => {
-  const de = validDate(req.query.de) ? req.query.de : '0000-01-01';
-  const ate = validDate(req.query.ate) ? req.query.ate : '9999-12-31';
-  const rows = db.prepare(`SELECT data,exame,proc,valor,medico,pagamento,taxa FROM entries
-                           WHERE deleted_at IS NULL AND data BETWEEN ? AND ? ORDER BY data, created_at`).all(de, ate);
-  // aspas + neutraliza fórmulas (=, +, -, @) para o Excel
-  const esc = s => { s = String(s); if (/^[=+\-@\t\r]/.test(s)) s = "'" + s; return '"' + s.replace(/"/g, '""') + '"'; };
-  const num = n => n.toFixed(2).replace('.', ',');
-  const head = ['Data', 'Exame', 'Procedimento', 'Médico solicitante', 'Pagamento', 'Valor bruto', 'Taxa %', 'Valor líquido'].join(';');
-  const body = rows.map(r => [
-    r.data.split('-').reverse().join('/'),
-    esc(r.exame),
-    r.proc === 'MG' ? 'Mamografia' : 'Ultrassom',
-    esc(r.medico),
-    r.pagamento ? NOME_PAG[r.pagamento] : 'Não informado',
-    num(r.valor),
-    num(r.taxa || 0),
-    num(round2(r.valor * (1 - (r.taxa || 0) / 100))),
-  ].join(';')).join('\r\n');
-  const nome = req.query.nome && /^[\w-]{1,40}$/.test(req.query.nome) ? req.query.nome : 'ganhos-particulares';
+const NOME_PAG = { dinheiro: 'Dinheiro', pix: 'PIX', debito: 'Débito', credito: 'Crédito à vista', credito_parc: 'Crédito parcelado', misto: 'Misto' };
+const NOME_FORMA = { dinheiro: 'Dinheiro', pix: 'PIX', debito: 'Débito', credito: 'Crédito', credito_parc: 'Crédito parcelado' };
+function nomePagamento(p) {
+  let s = NOME_FORMA[p.forma] || p.forma;
+  if (p.forma === 'credito') s += p.parcelas > 1 ? ` ${p.parcelas}x` : p.parcelas === 1 ? ' à vista' : '';
+  if (p.maquina_nome) s += ` (${p.maquina_nome})`;
+  return s;
+}
+// aspas + neutraliza fórmulas (=, +, -, @) para o Excel
+const csvEsc = s => { s = String(s == null ? '' : s); if (/^[=+\-@\t\r]/.test(s)) s = "'" + s; return '"' + s.replace(/"/g, '""') + '"'; };
+const periodo = q => [validDate(q.de) ? q.de : '0000-01-01', validDate(q.ate) ? q.ate : '9999-12-31'];
+function enviarCsv(res, q, padrao, head, linhas) {
+  const nome = q.nome && /^[\w-]{1,40}$/.test(q.nome) ? q.nome : padrao;
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', `attachment; filename="${nome}.csv"`);
-  res.send('﻿' + head + '\r\n' + body);   // BOM p/ acentos no Excel
+  res.send('﻿' + head.join(';') + '\r\n' + linhas.map(l => l.join(';')).join('\r\n'));   // BOM p/ acentos no Excel
+}
+app.get('/api/export.csv', auth, (req, res) => {
+  const [de, ate] = periodo(req.query);
+  const rows = db.prepare(`SELECT id,atendimento,data,exame,proc,valor,medico,pagamento,taxa FROM entries
+                           WHERE deleted_at IS NULL AND data BETWEEN ? AND ? ORDER BY data, created_at`).all(de, ate);
+  const pags = new Map();
+  for (const p of db.prepare('SELECT * FROM pagamentos WHERE deleted_at IS NULL ORDER BY ordem').all()) {
+    if (!pags.has(p.atendimento)) pags.set(p.atendimento, []); pags.get(p.atendimento).push(p);
+  }
+  const descPag = r => {
+    const ps = pags.get(r.atendimento || r.id);
+    if (ps && ps.length) return ps.length === 1 ? nomePagamento(ps[0]) : ps.map(p => `${nomePagamento(p)} R$ ${num2(p.valor)}`).join(' + ');
+    return r.pagamento ? (NOME_PAG[r.pagamento] || r.pagamento) : 'Não informado';
+  };
+  enviarCsv(res, req.query, 'ganhos-particulares',
+    ['Data', 'Exame', 'Procedimento', 'Médico solicitante', 'Pagamento', 'Valor bruto', 'Taxa %', 'Valor líquido'],
+    rows.map(r => [r.data.split('-').reverse().join('/'), csvEsc(r.exame), r.proc === 'MG' ? 'Mamografia' : 'Ultrassom', csvEsc(r.medico),
+      csvEsc(descPag(r)), num2(r.valor), num2(r.taxa || 0), num2(round2(r.valor * (1 - (r.taxa || 0) / 100)))]));
+});
+// uma linha por pagamento: serve para conferir com o extrato de cada maquininha
+app.get('/api/export-pagamentos.csv', auth, (req, res) => {
+  const [de, ate] = periodo(req.query);
+  const rows = db.prepare(`SELECT p.id, p.forma, p.maquina_nome, p.parcelas, p.valor, p.taxa, p.ordem, p.created_at,
+      MIN(e.data) AS data, MIN(e.medico) AS medico, GROUP_CONCAT(e.exame, ' + ') AS exames
+    FROM pagamentos p JOIN entries e ON e.deleted_at IS NULL AND (e.atendimento = p.atendimento OR (e.atendimento IS NULL AND e.id = p.atendimento))
+    WHERE p.deleted_at IS NULL GROUP BY p.id HAVING data BETWEEN ? AND ? ORDER BY data, p.created_at, p.ordem`).all(de, ate);
+  enviarCsv(res, req.query, 'pagamentos',
+    ['Data', 'Forma', 'Parcelas', 'Maquininha', 'Valor', 'Taxa %', 'Taxa R$', 'Valor líquido', 'Médico solicitante', 'Exames'],
+    rows.map(r => [r.data.split('-').reverse().join('/'), NOME_FORMA[r.forma] || r.forma,
+      r.forma === 'credito' ? (r.parcelas > 1 ? `${r.parcelas}x` : r.parcelas === 1 ? 'à vista' : '') : '',
+      csvEsc(r.maquina_nome || ''), num2(r.valor), num2(r.taxa || 0), num2(round2(r.valor * (r.taxa || 0) / 100)),
+      num2(round2(r.valor * (1 - (r.taxa || 0) / 100))), csvEsc(r.medico), csvEsc(r.exames)]));
 });
 
 /* ---------- meta conjunta (e-mail de comemoração) ----------
@@ -410,6 +625,8 @@ async function backupDiario() {
     todos.slice(0, Math.max(0, todos.length - BACKUPS_KEEP)).forEach(f => fs.unlinkSync(path.join(BACKUP_DIR, f)));
     // esvazia a lixeira antiga
     db.prepare('DELETE FROM entries WHERE deleted_at IS NOT NULL AND deleted_at < ?').run(Date.now() - TRASH_DAYS * 864e5);
+    db.prepare('DELETE FROM pagamentos WHERE deleted_at IS NOT NULL AND deleted_at < ?').run(Date.now() - TRASH_DAYS * 864e5);
+    db.prepare('DELETE FROM pagamentos WHERE atendimento NOT IN (SELECT COALESCE(atendimento, id) FROM entries)').run();
     db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(Date.now());
   } catch (e) { console.error('Falha no backup:', e); }
 }
