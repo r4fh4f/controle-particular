@@ -33,6 +33,13 @@ const SITE = Object.assign(
   JSON.parse(fs.readFileSync(path.join(__dirname, 'site.config.json'), 'utf8'))
 );
 
+// Metas da perfumaria (fogo nos marcos): dia pelo bruto, mês pelo líquido. Sem "metas" no
+// site.config.json, o site não mostra fogo nem holofotes (é assim no site da Fernanda, por enquanto).
+const METAS = (() => {
+  const m = SITE.metas || {}, ok = v => (Number.isFinite(+v) && +v > 0 ? +v : null);
+  return { dia: ok(m.dia), mes: ok(m.mes) };
+})();
+
 /* ---------- banco de dados ---------- */
 fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
 fs.mkdirSync(BACKUP_DIR, { recursive: true });
@@ -457,7 +464,7 @@ app.get('/api/trash', auth, (req, res) => {
 
 /* ---------- ajustes: maquininhas e taxas ---------- */
 app.get('/api/settings', auth, (req, res) => {
-  res.json({ maquinas: getMaquinas(), taxasConferidas: getSetting('taxasConferidas', false), maxParcelas: MAX_PARCELAS });
+  res.json({ maquinas: getMaquinas(), taxasConferidas: getSetting('taxasConferidas', false), maxParcelas: MAX_PARCELAS, metas: METAS });
 });
 app.put('/api/settings', auth, (req, res) => {
   const recebidas = req.body && Array.isArray(req.body.maquinas) ? req.body.maquinas : null;

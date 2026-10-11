@@ -3,5 +3,6 @@
   "dono": "Rafael",
   "inicial": "R",
   "accent": [0.82, 0.14, 75],
-  "accent2": [0.68, 0.16, 255]
+  "accent2": [0.68, 0.16, 255],
+  "metas": { "dia": 1000, "mes": 10000 }
 }

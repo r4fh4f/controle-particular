@@ -397,6 +397,147 @@ body.sheet-open #app{transform:scale(.985);filter:brightness(.42) saturate(.6)}
   .toast .act:hover{background:var(--fg3)}
 }
 
+/* ============================================================
+   PERFUMARIA (11/10/2026): fogo nos marcos e acabamento nos cantos
+   1 Lançar em chamas · 2 linha do dia em brasa · 3 líquido em chamas · 4 meses de fogo
+   5 o exame entra no setor · 6 recorde à caneta · 7 meta conjunta acesa · 8 espectro que corre
+   9 holofotes no recorde · 10 Salvar pronto · 11 exportar responde · 12 login com sonar
+   13 brilho à frente. Receitas da skill de perfumaria; o fogo é desenhado por fogo.js.
+   Movimento reduzido: a regra do fim do arquivo zera as durações (tudo aparece parado).
+   ============================================================ */
+:root{--brasa1:#ffd36b;--brasa2:#ff9a2e;--brasa3:#ff5a1f;--mola:cubic-bezier(.34,1.56,.64,1)}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+#brasas{position:fixed;inset:0;width:100%;height:100%;pointer-events:none;z-index:60}
+.ico-chama{width:10px;height:13px;flex:none;color:var(--brasa2);vertical-align:-2px}
+
+/* 1: o Lançar pega fogo no dia de R$ 1 mil (a chama é enfeite; o clique continua abrindo a folha) */
+.btn-launch{position:relative;transition:transform .16s var(--ease-out),background-color .16s,color .3s,box-shadow .5s,padding .45s var(--ease-out)}
+.btn-launch .soq{position:relative;flex:none;width:0;height:20px;margin-right:-10px;border-radius:50%;transition:width .45s var(--ease-out),margin .45s var(--ease-out)}
+.btn-launch .soq canvas{position:absolute;left:calc(50% - 26px);bottom:-4px;width:52px;height:88px;pointer-events:none}
+.btn-launch.acesa{padding-left:8px;color:#ffe9cf;background:linear-gradient(180deg,#24170f,#110a07);
+  box-shadow:inset 0 1px 0 rgb(255 220 170 / .22),0 10px 28px -10px rgb(255 90 31 / .6),0 0 0 1px rgb(255 154 46 / .42)}
+.btn-launch.acesa kbd{color:#ffc58f;border-color:rgb(255 170 100 / .4)}
+.btn-launch.acesa .soq{width:20px;margin-right:0;background:radial-gradient(circle at 50% 35%,#3a2416,#0f0805 70%);box-shadow:inset 0 2px 5px rgb(0 0 0 / .8)}
+.btn-launch.treme{animation:fogo-treme .42s ease}
+@keyframes fogo-treme{25%{rotate:-4deg}50%{rotate:4deg}75%{rotate:-2deg}}
+
+/* 2: a chama na ponta da linha de hoje (o arco e a brasa são desenhados no próprio setor) */
+#fan-fogo{pointer-events:none}
+.day.mil .t b{color:#ffb238}
+.day .t .ico-chama{margin-right:5px}
+
+/* 3: o líquido do mês em chamas; depois fica em brasa enquanto o mês estiver acima da meta */
+.hero-caixa{position:relative}
+.hero-chama{position:absolute;left:-10px;top:-70px;width:calc(100% + 20px);height:calc(100% + 70px);pointer-events:none}
+.hero.em-brasa .roll .st i{background:linear-gradient(0deg,var(--brasa3) 8%,#ffb238 55%,#ffe6a8 100%);-webkit-background-clip:text;background-clip:text;color:transparent}
+.hero.em-brasa .big .ch{color:#ffb238}
+.hero.em-brasa .big{filter:drop-shadow(0 0 16px rgb(255 110 30 / .32))}
+.marco-chip{display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 9px 0 7px;border-radius:12px;font-family:var(--data);font-variation-settings:"wdth" 80;font-size:11px;white-space:nowrap;
+  color:#ffc58f;background:linear-gradient(180deg,#24170f,#140b07);box-shadow:inset 0 0 0 1px rgb(255 154 46 / .38)}
+.marco-chip.novo{animation:chip-entra .5s var(--mola) both}
+.marco-chip.recorde{color:#f5d87a;background:linear-gradient(180deg,#221c0c,#120f06);box-shadow:inset 0 0 0 1px rgb(245 216 122 / .4)}
+@keyframes chip-entra{from{opacity:0;transform:scale(.8)}}
+/* os avisos dos marcos ganham uma chama no lugar do ponto */
+.toast.fogo{background:linear-gradient(180deg,#1e1510,#140e0b);border-color:rgb(255 154 46 / .35)}
+.toast.fogo .dot{width:10px;height:13px;border-radius:0;background:none;box-shadow:none;color:var(--brasa2);filter:drop-shadow(0 0 5px rgb(255 120 30 / .8))}
+.toast.fogo .msg small{color:#b98a6a}
+
+/* 4: os meses de fogo nas barras do topo, com a linha da meta */
+.cine .b.fogo{background:linear-gradient(to top,var(--line2) 0 55%,#8a3a12 70%,var(--brasa2) 88%,var(--brasa1));box-shadow:0 -3px 10px -2px rgb(255 120 30 / .55)}
+.cine button[aria-current="true"] .b.fogo{background:linear-gradient(to top,var(--caliper) 0 45%,var(--brasa2) 80%,var(--brasa1));box-shadow:0 -3px 12px -1px rgb(255 120 30 / .7)}
+.cine-meta{position:absolute;left:0;right:0;height:0;border-top:1px dashed rgb(255 154 46 / .45);pointer-events:none}
+.cine-meta span{position:absolute;right:0;top:-13px;font-family:var(--data);font-variation-settings:"wdth" 75;font-size:9px;color:rgb(255 170 90 / .8)}
+
+/* 6: recorde marcado à caneta (receita 1) */
+.marca{padding:1px 3px;margin:-1px -3px;border-radius:3px;
+  background:linear-gradient(color-mix(in oklab,var(--caliper) 34%,transparent),color-mix(in oklab,var(--caliper) 34%,transparent)) no-repeat 0 0 / 100% 100%}
+.marca.desenha{animation:marca-caneta .75s var(--ease-out) both}
+@keyframes marca-caneta{from{background-size:0% 100%}}
+.recorde-tag{margin-left:6px;font-family:var(--data);font-variation-settings:"wdth" 78;font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--caliper)}
+
+/* 7: meta conjunta: reflexo a cada abertura; batida, vira brasa com uma fileira de chamas */
+.marco-pista{position:relative}
+.marco-chama{position:absolute;left:0;bottom:2px;width:100%;height:70px;pointer-events:none}
+.marco-bar div{position:relative;overflow:hidden}
+.marco-bar div::after{content:"";position:absolute;inset:0;background:linear-gradient(100deg,transparent 30%,rgb(255 255 255 / .5) 50%,transparent 70%);transform:translateX(-120%)}
+.marco-bar div.brilha::after{animation:marco-reluz 1.2s 1s var(--ease-out)}
+@keyframes marco-reluz{to{transform:translateX(120%)}}
+.marco-bar div.batida{background:linear-gradient(90deg,#8a2a0c,var(--brasa3) 45%,var(--brasa2) 80%,var(--brasa1))}
+
+/* 9: holofotes no melhor mês da história (receita 15, em âmbar) */
+.report{position:relative}
+.report > :not(.holofotes){position:relative}
+.holofotes{position:absolute;inset:0;overflow:hidden;border-radius:inherit;pointer-events:none;opacity:0;transition:opacity .9s var(--ease-out)}
+.report.holo .holofotes{opacity:1}
+.holofotes span{position:absolute;inset:0;transform-origin:50% 0;animation:holo-deriva 7s ease-in-out infinite paused}
+.holofotes span:nth-child(2){animation-duration:9s;animation-delay:-3s}
+.holofotes span:nth-child(3){animation-duration:6s;animation-delay:-1.5s}
+.report.holo .holofotes span{animation-play-state:running}
+.holofotes i{position:absolute;left:0;right:0;top:-1em;margin:0 auto;width:22em;height:26em;border-radius:0 0 50% 50%;transform-origin:50% 0;filter:blur(10px);opacity:.6;
+  background:conic-gradient(from 0deg at 50% -5%,transparent 45%,rgb(245 216 122 / .28) 49%,rgb(245 216 122 / .55) 50%,rgb(245 216 122 / .28) 51%,transparent 55%)}
+.holofotes span:nth-child(1) i{rotate:24deg}
+.holofotes span:nth-child(2) i{rotate:-24deg}
+@keyframes holo-deriva{0%,100%{transform:rotate(0) scale(1)}25%{transform:rotate(-3deg) scale(1.1)}50%{transform:rotate(4deg) scale(1.16)}75%{transform:rotate(-2.5deg) scale(1.06)}}
+.hero.holo .roll .st i{background:linear-gradient(0deg,#d8a910 15%,#f5d87a 65%,#fff3cf);-webkit-background-clip:text;background-clip:text;color:transparent}
+.hero.holo .big .ch{color:#f5d87a}
+
+/* 10: o Salvar fica apagado até a folha estar completa; pronto, uma luz corre a borda (receita 14) */
+@property --salvar-giro{syntax:'<angle>';inherits:false;initial-value:0deg}
+.save{position:relative;isolation:isolate}
+.save.press{transition:transform .16s var(--ease-out),opacity .25s,background-color .16s}
+.save:not(.pronta){opacity:.6}
+.save.pronta::before,.save.pronta::after{content:"";position:absolute;inset:-3px;border-radius:15px;padding:1.5px;pointer-events:none;
+  background:conic-gradient(from var(--salvar-giro),transparent 0 66%,var(--caliper) 84%,#fff 88%,transparent 93%);
+  -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;
+  mask:linear-gradient(#000 0 0) content-box exclude,linear-gradient(#000 0 0);
+  animation:salvar-giro 3.2s linear infinite}
+.save.pronta::after{filter:blur(6px);opacity:.8;z-index:-1}
+@keyframes salvar-giro{to{--salvar-giro:360deg}}
+
+/* 11: exportar responde: o fundo do ícone enche o botão; o clique vira "Baixado" (receitas 6 e 5) */
+.ghostbtn.exp{position:relative;isolation:isolate;padding-left:4px;gap:7px}
+.exp__bolha{position:absolute;left:3px;top:3px;bottom:3px;width:24px;border-radius:6px;background:var(--raise);z-index:-1;transition:width .5s cubic-bezier(.2,0,0,1),background-color .35s}
+.exp__ico{display:grid;place-items:center;width:24px;height:24px;flex:none}
+.exp__ico svg{width:13px;height:13px}
+.exp__rot{display:grid;overflow:hidden;height:1.35em;line-height:1.35}
+.exp__rot > span{grid-area:1/1;transition:translate .5s var(--mola),opacity .3s}
+.exp__rot > span + span{translate:0 110%;opacity:0;color:var(--up)}
+.exp:focus-visible .exp__bolha{width:calc(100% - 6px);background:color-mix(in oklab,var(--caliper) 16%,var(--raise))}
+.exp.feito .exp__rot > span:first-child{translate:0 -110%;opacity:0}
+.exp.feito .exp__rot > span + span{translate:0 0;opacity:1}
+.exp .ico-ok,.exp.feito .ico-baixa{display:none}
+.exp.feito .ico-ok{display:block;color:var(--up)}
+.exp.feito .ico-ok path{stroke-dasharray:14;animation:exp-risca .45s .1s var(--ease-out) both}
+@keyframes exp-risca{from{stroke-dashoffset:14}}
+
+/* 12: login: o nome sobe letra por letra; o transdutor pulsa enquanto o servidor confere a senha */
+.login .sonda{position:relative;display:grid;place-items:center;color:var(--caliper);margin-bottom:6px;transition:color .2s}
+.login .sonda .probe{position:relative;margin:0;color:inherit}
+.sonda .onda{position:absolute;left:50%;top:62%;width:22px;height:22px;margin:-11px 0 0 -11px;border-radius:50%;border:1px solid currentColor;opacity:0}
+.login.checando .onda{animation:sonar-onda 1.1s cubic-bezier(.2,0,0,1) infinite}
+.login.checando .onda + .onda{animation-delay:.55s}
+.login.errou .sonda{color:var(--down)}
+.login.errou .onda{animation:sonar-onda 1.1s cubic-bezier(.2,0,0,1)}
+.login.entrou .sonda{color:var(--up)}
+@keyframes sonar-onda{0%{scale:1;opacity:.85}100%{scale:4.2;opacity:0}}
+.login h1 .l{display:inline-block;overflow:hidden;vertical-align:top;padding:.04em .02em .14em;margin:-.04em -.02em -.14em}
+.login h1 .l > span{display:inline-block}
+.login h1.sobe .l > span{animation:nome-sobe .8s cubic-bezier(.2,0,0,1) backwards;animation-delay:calc(var(--n) * 45ms + 260ms)}
+@keyframes nome-sobe{from{transform:translateY(110%)}}
+
+/* 13: uma passada de luz na etiqueta verde quando o mês abre à frente (receita 4) */
+@property --delta-brilho{syntax:'<percentage>';inherits:false;initial-value:-40%}
+.delta.up .bt{background:linear-gradient(100deg,var(--up) calc(var(--delta-brilho) - 14%),#fff var(--delta-brilho),var(--up) calc(var(--delta-brilho) + 14%));
+  -webkit-background-clip:text;background-clip:text;color:transparent}
+.delta.up.brilha .bt{animation:delta-brilho 1.5s cubic-bezier(.4,0,.2,1) .5s both}
+@keyframes delta-brilho{from{--delta-brilho:-40%}to{--delta-brilho:140%}}
+
+@media (hover:hover){
+  .btn-launch.acesa:hover{background:linear-gradient(180deg,#2e1d12,#160d08)}
+  .ghostbtn.exp:hover{background:transparent}
+  .exp:hover .exp__bolha{width:calc(100% - 6px);background:color-mix(in oklab,var(--caliper) 16%,var(--raise))}
+}
+
 /* ============ responsivo ============ */
 @media (max-width:1080px){
   .scan,.lower{grid-template-columns:minmax(0,1fr)}
@@ -435,6 +576,7 @@ body.sheet-open #app{transform:scale(.985);filter:brightness(.42) saturate(.6)}
   .top{gap:10px;padding-bottom:10px}
   .tabs{order:3;width:100%;margin-left:0}
   .mark .full{display:none}
+  .ann.tr{display:none}   /* no celular as anotações dos dois cantos se sobrepunham; bruto, taxas e líquido estão no laudo logo abaixo */
 }
 @media (prefers-reduced-motion:reduce){
   *,*::before,*::after{transition-duration:0s!important;animation-duration:0s!important;animation-delay:0s!important}

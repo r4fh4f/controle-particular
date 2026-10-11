@@ -68,6 +68,7 @@ let route = { page: '' };
 let lastYm = curYM();
 let hoverDay = -1, pinDay = '', q = '', filt = null, rkKey = 'exame', lastNav = 0;
 const fresh = new Set();
+const metas = () => settings.metas || {};   // perfumaria: { dia, mes } do site.config.json; vazio = sem fogo
 
 /* ---------- API ---------- */
 class ApiErr extends Error { constructor(m, status, data) { super(m); this.status = status; this.data = data; } }
@@ -92,6 +93,7 @@ function indexar() {
   entsByAt = new Map(); for (const e of entries) { const k = atKey(e); if (!entsByAt.has(k)) entsByAt.set(k, []); entsByAt.get(k).push(e); }
   paysByAt = new Map(); for (const p of pagamentos) { if (!paysByAt.has(p.atendimento)) paysByAt.set(p.atendimento, []); paysByAt.get(p.atendimento).push(p); }
   for (const l of paysByAt.values()) l.sort((a, b) => (a.ordem || 0) - (b.ordem || 0));
+  confereMarcos();   // perfumaria: toda mudança de dados passa por aqui
 }
 function partsOf(key) {
   const ps = paysByAt.get(key); if (ps && ps.length) return ps;
@@ -227,27 +229,53 @@ function sectorPath(x, ax, ay, ra, rb, ta, tb) { x.beginPath(); x.arc(ax, ay, rb
 
 const fan = $('#fan'); let geo = null, sweep = 1, sweepRAF = 0;
 function dayVals(ym) { const n = daysIn(ym); const v = Array(n).fill(0), cnt = Array(n).fill(0); for (const e of ofM(ym)) { const i = +e.data.slice(8) - 1; v[i] += e.valor; cnt[i]++; } return { v, cnt, n }; }
+// perfumaria 5: quando os dados do mês mudam (lançar, editar, excluir, desfazer), cada linha
+// cresce da medida que estava na tela até a nova e solta um pulso na ponta. Navegar de mês não
+// cresce (a varredura cuida disso). Movimento reduzido: troca seco.
+const CRESCE = 700, PULSO = 900;
+const cresce = { ym: null, de: null, para: null, t0: -1e9, dias: [], cruzou: new Set(), raf: 0 };
+function interpCresce(agora) {
+  const k = (agora - cresce.t0) / CRESCE; if (k >= 1) return cresce.para;
+  const e = easeOut(Math.max(0, k)); return cresce.para.map((x, i) => cresce.de[i] + (x - cresce.de[i]) * e);
+}
+function valoresNaTela(ym, v, agora) {
+  if (reduce || cresce.ym !== ym || !cresce.para || cresce.para.length !== v.length) {
+    Object.assign(cresce, { ym, de: v.slice(), para: v.slice(), t0: -1e9, dias: [] }); return v;
+  }
+  if (v.some((x, i) => x !== cresce.para[i])) {
+    const atual = interpCresce(agora);
+    cresce.dias = v.map((x, i) => (x !== cresce.para[i] ? i : -1)).filter(i => i >= 0);
+    Object.assign(cresce, { de: atual, para: v.slice(), t0: agora, cruzou: new Set() });
+    cancelAnimationFrame(cresce.raf);
+    const passo = () => { drawFan(); if (performance.now() < cresce.t0 + CRESCE + PULSO * 1.3) cresce.raf = requestAnimationFrame(passo); };
+    cresce.raf = requestAnimationFrame(passo);
+  }
+  return interpCresce(agora);
+}
 function drawFan() {
   if (route.page !== 'mes' || !route.ym) return;
   const ym = route.ym; const { x, w, h } = fit(fan); x.clearRect(0, 0, w, h);
-  const { v, n } = dayVals(ym); const max = Math.max(...v); const { top, step } = niceTop(Math.max(max, 400));
+  const real = dayVals(ym), n = real.n, max = Math.max(...real.v); const { top, step } = niceTop(Math.max(max, 400));
+  const agora = performance.now(), v = valoresNaTela(ym, real.v, agora), meta = metas().dia || 0;
   const span = 74 * Math.PI / 180, a0 = -span / 2;
   const R = Math.max(60, Math.min((h - 96) / (1 - 0.17 * Math.cos(span / 2)), (w - 190) / (2 * Math.sin(span / 2))));
   const r0 = R * .17, ax = w / 2 - 24, ay = h - 30 - R;
-  geo = { ax, ay, R, r0, span, a0, n };
   const rv = val => r0 + (val / top) * (R - r0);
   const P = (r, t) => [ax + r * Math.sin(t), ay + r * Math.cos(t)];
   const sector = (ra, rb, ta, tb) => sectorPath(x, ax, ay, ra, rb, ta, tb);
+  const slot = span / n, gap = Math.min(slot * .22, .012), shown = Math.floor(sweep * n + 1e-6);
+  geo = { ax, ay, R, r0, span, a0, n, ym, v, rv, slot };
   // "tecido" de fundo
   sector(r0, R, a0, -a0); x.save(); x.clip();
   const g = x.createRadialGradient(ax, ay, r0, ax, ay, R); g.addColorStop(0, '#0d0f11'); g.addColorStop(1, '#060708'); x.fillStyle = g; x.fillRect(0, 0, w, h);
   x.globalAlpha = .07; x.fillStyle = x.createPattern(noise, 'repeat'); x.fillRect(0, 0, w, h); x.globalAlpha = 1; x.restore();
-  // anéis de profundidade
+  // anéis de profundidade (o da meta do dia vira o arco tracejado)
   x.lineWidth = 1;
-  for (let t = step; t <= top + 1e-6; t += step) { x.strokeStyle = 'rgba(255,255,255,.065)'; x.beginPath(); x.arc(ax, ay, rv(t), Math.PI / 2 + a0, Math.PI / 2 - a0); x.stroke(); }
+  for (let t = step; t <= top + 1e-6; t += step) { if (meta && Math.abs(t - meta) < 1e-6) continue; x.strokeStyle = 'rgba(255,255,255,.065)'; x.beginPath(); x.arc(ax, ay, rv(t), Math.PI / 2 + a0, Math.PI / 2 - a0); x.stroke(); }
   x.strokeStyle = 'rgba(255,255,255,.12)'; sector(r0, R, a0, -a0); x.stroke();
+  // perfumaria 2: o arco da meta do dia (R$ 1 mil), tracejado
+  if (meta && meta <= top) { x.save(); x.setLineDash([3, 4]); x.strokeStyle = 'rgba(255,154,46,.5)'; x.lineWidth = 1.2; x.beginPath(); x.arc(ax, ay, rv(meta), Math.PI / 2 + a0, Math.PI / 2 - a0); x.stroke(); x.restore(); }
   // uma linha por dia
-  const slot = span / n, gap = Math.min(slot * .22, .012), shown = Math.floor(sweep * n + 1e-6);
   const today = ym === curYM() ? new Date().getDate() - 1 : n;
   const cal = cssVar('--caliper');
   for (let i = 0; i < n; i++) {
@@ -255,13 +283,41 @@ function drawFan() {
     if (i > today) { x.strokeStyle = 'rgba(255,255,255,.035)'; sector(r0, R, ta, tb); x.stroke(); continue; }
     if (i >= shown || !v[i]) continue;
     const hot = i === hoverDay, pinned = pinDay && +pinDay.slice(8) - 1 === i;
-    const re = rv(v[i]); sector(r0, re, ta, tb);
+    const re = rv(v[i]), passou = meta > 0 && v[i] >= meta, rm = passou ? rv(meta) : re;
+    sector(r0, rm, ta, tb);
     const gg = x.createRadialGradient(ax, ay, r0, ax, ay, R);
     gg.addColorStop(0, hot ? 'rgba(255,255,255,.55)' : 'rgba(220,228,232,.18)'); gg.addColorStop(1, hot ? 'rgba(255,255,255,1)' : 'rgba(236,241,243,.88)');
     x.fillStyle = gg; x.fill();
+    if (passou) {   // perfumaria 2: o trecho além da meta fica em brasa
+      sector(rm, re, ta, tb);
+      const gb = x.createRadialGradient(ax, ay, rm, ax, ay, Math.max(re, rm + 1));
+      gb.addColorStop(0, '#ffd36b'); gb.addColorStop(.55, '#ff9a2e'); gb.addColorStop(1, '#ff5a1f'); x.fillStyle = gb; x.fill();
+    }
+    sector(r0, re, ta, tb);
     x.save(); x.clip(); x.globalCompositeOperation = 'destination-out'; x.globalAlpha = hot ? .25 : .5; x.fillStyle = x.createPattern(noise, 'repeat'); x.fillRect(0, 0, w, h); x.restore();
-    x.strokeStyle = hot ? '#fff' : 'rgba(255,255,255,.9)'; x.lineWidth = hot ? 2 : 1.4; x.beginPath(); x.arc(ax, ay, re, Math.PI / 2 - tb, Math.PI / 2 - ta); x.stroke();
+    x.strokeStyle = passou ? (hot ? '#ffe6a8' : '#ffb238') : hot ? '#fff' : 'rgba(255,255,255,.9)'; x.lineWidth = hot ? 2 : 1.4; x.beginPath(); x.arc(ax, ay, re, Math.PI / 2 - tb, Math.PI / 2 - ta); x.stroke();
+    if (passou) {
+      const [cx, cy] = P(re, (ta + tb) / 2), gl = x.createRadialGradient(cx, cy, 0, cx, cy, 12);
+      gl.addColorStop(0, 'rgba(255,170,60,.55)'); gl.addColorStop(1, 'rgba(255,90,20,0)');
+      x.save(); x.globalCompositeOperation = 'lighter'; x.fillStyle = gl; x.fillRect(cx - 12, cy - 12, 24, 24); x.restore();
+    }
     if (pinned) { x.strokeStyle = cal; x.lineWidth = 2; x.beginPath(); x.arc(ax, ay, R + 6, Math.PI / 2 - tb, Math.PI / 2 - ta); x.stroke(); }
+  }
+  // perfumaria 5: pulso na ponta das linhas que acabaram de mudar; brasas no instante em que uma cruza a meta
+  if (cresce.ym === ym && cresce.dias.length) {
+    const kp = (agora - cresce.t0 - CRESCE * .6) / PULSO;
+    for (const i of cresce.dias) {
+      if (i >= shown || !v[i]) continue;
+      const t = a0 + (i + .5) * slot;
+      if (kp > 0 && kp < 1.3) {
+        const [cx, cy] = P(rv(v[i]), t);
+        for (const atraso of [0, .3]) { const kk = kp - atraso; if (kk <= 0 || kk >= 1) continue; x.strokeStyle = cal; x.globalAlpha = (1 - kk) * .9; x.lineWidth = 1.4; x.beginPath(); x.arc(cx, cy, 3 + easeOut(kk) * 24, 0, Math.PI * 2); x.stroke(); }
+        x.globalAlpha = 1;
+      }
+      if (meta && brasas && !cresce.cruzou.has(i) && cresce.de[i] < meta && v[i] >= meta && agora < cresce.t0 + CRESCE + 100) {
+        cresce.cruzou.add(i); const [cx, cy] = P(rv(meta), t), rc = fan.getBoundingClientRect(); brasas.rajada(rc.left + cx, rc.top + cy, .9);
+      }
+    }
   }
   // linha de varredura
   if (sweep < 1) {
@@ -269,14 +325,14 @@ function drawFan() {
     const lg = x.createLinearGradient(x1, y1, x2, y2); lg.addColorStop(0, 'rgba(255,255,255,0)'); lg.addColorStop(1, 'rgba(255,255,255,.75)');
     x.save(); x.shadowColor = 'rgba(255,255,255,.6)'; x.shadowBlur = 12; x.strokeStyle = lg; x.lineWidth = 2; x.beginPath(); x.moveTo(x1, y1); x.lineTo(x2, y2); x.stroke(); x.restore();
   }
-  // régua de profundidade em R$
+  // régua de profundidade em R$ (a marca da meta do dia em âmbar)
   const rx = Math.min(w - 84, ax + R * Math.sin(span / 2) + 34);
   x.strokeStyle = 'rgba(255,255,255,.18)'; x.lineWidth = 1; x.beginPath(); x.moveTo(rx, ay + r0); x.lineTo(rx, ay + R); x.stroke();
   x.font = '500 10px "Martian Mono", monospace'; x.textBaseline = 'middle'; x.textAlign = 'left';
   for (let t = 0; t <= top + 1e-6; t += step / 5) {
-    const yy = ay + rv(t); const major = Math.abs(t / step - Math.round(t / step)) < 1e-6;
-    x.fillStyle = major ? 'rgba(255,255,255,.55)' : 'rgba(255,255,255,.25)'; x.fillRect(rx - (major ? 6 : 3), yy - .5, major ? 6 : 3, 1);
-    if (major) { x.fillStyle = 'rgba(255,255,255,.42)'; x.fillText(t ? brlK(t) : 'R$ 0', rx + 6, yy); }
+    const yy = ay + rv(t); const major = Math.abs(t / step - Math.round(t / step)) < 1e-6, mil = meta && Math.abs(t - meta) < 1e-6;
+    x.fillStyle = mil ? 'rgba(255,170,80,.9)' : major ? 'rgba(255,255,255,.55)' : 'rgba(255,255,255,.25)'; x.fillRect(rx - (major ? 6 : 3), yy - .5, major ? 6 : 3, 1);
+    if (major) { x.fillStyle = mil ? 'rgba(255,170,80,.95)' : 'rgba(255,255,255,.42)'; x.fillText(t ? brlK(t) : 'R$ 0', rx + 6, yy); }
   }
   // marcador de foco = média por dia trabalhado
   const worked = v.slice(0, today + 1).filter(Boolean); const avg = worked.length ? worked.reduce((a, b) => a + b, 0) / worked.length : 0;
@@ -319,6 +375,7 @@ fan.addEventListener('click', ev => {
 
 // espectro anual: este ano acima da linha de base, ano anterior espelhado abaixo
 const dopState = {};
+const dopAnim = { id: null, p: 1, raf: 0 };   // perfumaria 8: o espectro corre atrás de uma linha de varredura
 function monthly(y) { return Array.from({ length: 12 }, (_, i) => agg(ofM(`${y}-${pad(i + 1)}`)).b); }
 function drawDop(c, y, hi = -1) {
   if (!c.clientWidth) return;
@@ -328,6 +385,7 @@ function drawDop(c, y, hi = -1) {
   const L = 70, Rp = 18, base = h * .58, upH = base - 46, dnH = h - base - 26, cw = (w - L - Rp) / 12;
   dopState[c.id] = { L, cw, y, cur, prv };
   const X = i => L + (i + .5) * cw;
+  const prog = dopAnim.id === c.id ? dopAnim.p : 1, xp = L + (w - L - Rp) * prog;
   x.strokeStyle = 'rgba(255,255,255,.05)'; x.lineWidth = 1;
   for (const f of [.5, 1]) { x.beginPath(); x.moveTo(L, base - upH * f); x.lineTo(w - Rp, base - upH * f); x.moveTo(L, base + dnH * f); x.lineTo(w - Rp, base + dnH * f); x.stroke(); }
   x.font = '500 10px "Martian Mono", monospace'; x.textBaseline = 'middle'; x.fillStyle = 'rgba(255,255,255,.35)'; x.textAlign = 'right';
@@ -348,17 +406,43 @@ function drawDop(c, y, hi = -1) {
     const g = x.createLinearGradient(0, base, 0, base - dir * H); g.addColorStop(0, `rgba(${rgb},.35)`); g.addColorStop(1, `rgba(${rgb},0)`); x.fillStyle = g; x.fillRect(L, Math.min(base, base - dir * H), w, H);
     x.restore(); x.strokeStyle = `rgba(${rgb},.95)`; x.lineWidth = 1.5; x.stroke(p);
   }
+  x.save(); if (prog < 1) { x.beginPath(); x.rect(0, 0, xp, h); x.clip(); }
   if (prv.some(Boolean)) fillSpec(env(prv, 11, -1, dnH), -1, dnH, '79,141,255', 977);
   if (cur.some(Boolean)) fillSpec(env(cur, lastM, 1, upH), 1, upH, '236,241,243', 13);
+  x.restore();
+  // a meta do mês, tracejada (o espectro é bruto; a meta é líquida: a diferença é só a taxa de cartão)
+  const mm = metas().mes;
+  if (mm && mm <= top) {
+    const my = base - mm / top * upH;
+    x.save(); x.setLineDash([3, 4]); x.strokeStyle = 'rgba(255,154,46,.5)'; x.beginPath(); x.moveTo(L, my); x.lineTo(w - Rp, my); x.stroke(); x.restore();
+    if (Math.abs(my - (base - upH)) > 16 && Math.abs(my - (base - upH / 2)) > 16) { x.fillStyle = 'rgba(255,170,80,.9)'; x.textAlign = 'right'; x.textBaseline = 'middle'; x.fillText(brlK(mm), L - 10, my); }
+  }
   x.strokeStyle = 'rgba(255,255,255,.35)'; x.beginPath(); x.moveTo(L, base + .5); x.lineTo(w - Rp, base + .5); x.stroke();
   const cal = cssVar('--caliper'); const cm = c.id === 'dop' && route.ym && route.ym.startsWith(y + '-') ? +route.ym.slice(5) - 1 : -1;
   x.textAlign = 'center'; x.textBaseline = 'alphabetic';
   for (let i = 0; i < 12; i++) { x.fillStyle = i === cm ? cal : i === hi ? '#fff' : 'rgba(255,255,255,.4)'; x.fillText(MES[i], X(i), h - 8); }
   for (const [i, col] of [[cm, cal], [hi, 'rgba(255,255,255,.7)']]) {
-    if (i < 0) continue;
+    if (i < 0 || prog < 1) continue;
     x.strokeStyle = col; x.lineWidth = 1; x.beginPath(); x.moveTo(X(i), base - upH - 6); x.lineTo(X(i), base + dnH + 2); x.stroke();
     if (i <= lastM && cur[i]) { x.fillStyle = col; x.beginPath(); x.arc(X(i), base - cur[i] / top * upH, 4, 0, 7); x.fill(); }
   }
+  if (prog < 1) {   // a linha de varredura, com rastro
+    const gs = x.createLinearGradient(xp - 40, 0, xp, 0); gs.addColorStop(0, 'rgba(255,255,255,0)'); gs.addColorStop(1, 'rgba(255,255,255,.14)');
+    x.fillStyle = gs; x.fillRect(xp - 40, base - upH - 6, 40, upH + dnH + 8);
+    x.save(); x.shadowColor = 'rgba(255,255,255,.7)'; x.shadowBlur = 10; x.strokeStyle = 'rgba(255,255,255,.85)'; x.lineWidth = 1.5;
+    x.beginPath(); x.moveTo(xp, base - upH - 6); x.lineTo(xp, base + dnH + 2); x.stroke(); x.restore();
+  }
+}
+function correEspectro(c, y) {
+  cancelAnimationFrame(dopAnim.raf);
+  if (reduce) { dopAnim.id = null; drawDop(c, y); return; }
+  const t0 = performance.now(); dopAnim.id = c.id; dopAnim.p = 0; drawDop(c, y);
+  const passo = now => {
+    const k = Math.min(1, (now - t0) / 1500); dopAnim.p = 1 - Math.pow(1 - k, 1.6);
+    drawDop(c, dopState[c.id] ? dopState[c.id].y : y);
+    if (k < 1) dopAnim.raf = requestAnimationFrame(passo); else dopAnim.id = null;
+  };
+  dopAnim.raf = requestAnimationFrame(passo);
 }
 function wireDop(c, onPick) {
   const idx = ev => { const s = dopState[c.id]; if (!s) return -1; const i = Math.floor((ev.clientX - c.getBoundingClientRect().left - s.L) / s.cw); return i >= 0 && i < 12 ? i : -1; };
@@ -375,11 +459,12 @@ function wireDop(c, onPick) {
 /* ============================================================
    TELA: MÊS
    ============================================================ */
-function deltaChip(cur, prev, label) {
+function deltaChip(cur, prev, label, brilha = false) {
   if (!prev) return '';
   const p = (cur - prev) / prev * 100;
   if (Math.abs(p) < .5) return `<span class="delta flat">=</span><span>${esc(label)}</span>`;
-  return `<span class="delta ${p > 0 ? 'up' : 'down'}">${p > 0 ? '▲' : '▼'} ${N1.format(Math.abs(p))}%</span><span>${esc(label)}</span>`;
+  // perfumaria 13: à frente do mês passado, uma passada de luz quando o mês abre (não em cada atualização)
+  return `<span class="delta ${p > 0 ? 'up' : 'down'}${brilha && p > 0 ? ' brilha' : ''}"><span class="bt">${p > 0 ? '▲' : '▼'} ${N1.format(Math.abs(p))}%</span></span><span>${esc(label)}</span>`;
 }
 function renderMes(dir, { sweepIt = true } = {}) {
   const ym = route.ym; const Y = +ym.slice(0, 4), M = +ym.slice(5);
@@ -400,10 +485,14 @@ function renderMes(dir, { sweepIt = true } = {}) {
   if (isCur) { const dd = todayISO().slice(8); pl = pl.filter(e => e.data.slice(8) <= dd); lab = `vs ${MES[+pym.slice(5) - 1]} até dia ${+dd}`; }
   const p = agg(pl);
   const [ip, cp] = N2.format(a.l).split(','); setRoll($('#hero'), ip, !rapid); setRoll($('#cents'), ',' + cp, !rapid);
-  $('#herosub').innerHTML = deltaChip(a.l, p.l, lab) || `<span class="dim">${list.length ? 'sem mês anterior para comparar' : 'nenhum exame lançado'}</span>`;
+  pintaHero(ym, a.l);
+  $('#herosub').innerHTML = (deltaChip(a.l, p.l, lab, sweepIt && !rapid) || `<span class="dim">${list.length ? 'sem mês anterior para comparar' : 'nenhum exame lançado'}</span>`) + chipsDoMes(ym, a.l);
   const { v } = dayVals(ym); const today = isCur ? new Date().getDate() - 1 : v.length - 1;
   const worked = v.slice(0, today + 1).filter(Boolean); const avg = worked.length ? worked.reduce((s, x) => s + x, 0) / worked.length : 0;
   let best = -1; v.forEach((x, i) => { if (x && (best < 0 || x > v[best])) best = i; });
+  // perfumaria 6: hoje virou o melhor dia do mês → marca-texto (desenhado só no lançamento que bateu o recorde)
+  const recHoje = isCur && best >= 0 && best === today && worked.length > 1, desde = performance.now() - marcaDesde, desenha = recHoje && desde < 800;
+  const melhor = best >= 0 ? `${pad(best + 1)}/${ym.slice(5)} · ${brl(v[best])}` : '—';
   const row = (k, val, extra = '', cls = '') => `<div class="row"><span class="k">${k}</span><span class="lead"></span><span class="v ${cls}">${val}${extra}</span></div>`;
   const pct = (c, pv) => pv ? ` <small>${c >= pv ? '▲' : '▼'} ${N1.format(Math.abs((c - pv) / pv * 100))}%</small>` : '';
   $('#meas').innerHTML =
@@ -412,7 +501,8 @@ function renderMes(dir, { sweepIt = true } = {}) {
     row('Exames', a.n, pct(a.n, p.n)) +
     row('Atendimentos', a.at, a.at ? ` <small>ticket ${brl(a.b / a.at)}</small>` : '') +
     row('Média por dia trabalhado', '▸ ' + brl(avg), '', 'focal') +
-    row('Melhor dia', best >= 0 ? `${pad(best + 1)}/${ym.slice(5)} · ${brl(v[best])}` : '—');
+    row('Melhor dia' + (recHoje ? '<span class="recorde-tag">recorde</span>' : ''),
+      recHoje ? `<span class="marca${desenha ? ' desenha' : ''}"${desenha ? ` style="animation-delay:-${Math.round(desde)}ms"` : ''}>${melhor}</span>` : melhor);
   // formas de pagamento e maquininhas (a partir dos pagamentos de cada atendimento)
   const cat = new Map(), maq = new Map();
   for (const k of new Set(list.map(atKey))) {
@@ -441,13 +531,17 @@ function renderMes(dir, { sweepIt = true } = {}) {
   $('#exp-mes').href = `/api/export.csv?de=${ym}-01&ate=${ym}-${daysIn(ym)}&nome=ganhos-${ym}`;
   $('#exp-pag').href = `/api/export-pagamentos.csv?de=${ym}-01&ate=${ym}-${daysIn(ym)}&nome=pagamentos-${ym}`;
   renderWL(); renderRank();
+  if (laco) laco.acorda();   // as chamas conferem o estado novo
 }
 function renderCine() {
   const months = []; const start = shiftYM(curYM(), -23) > minYM() ? shiftYM(curYM(), -23) : minYM();
   for (let m = start; m <= curYM(); m = shiftYM(m, 1)) months.push(m);
-  const vals = months.map(m => agg(ofM(m)).b); const mx = Math.max(...vals, 1);
+  const ags = months.map(m => agg(ofM(m))), vals = ags.map(g => g.b), mx = Math.max(...vals, 1), meta = metas().mes;
   const el = $('#cine');
-  el.innerHTML = months.map((m, i) => `<button data-ym="${m}" aria-current="${m === route.ym}" data-tip="${MESL[+m.slice(5) - 1]} ${m.slice(0, 4)} · ${brl(vals[i])}" aria-label="${MESL[+m.slice(5) - 1]} ${m.slice(0, 4)}" class="press"><span class="b" style="height:${Math.max(3, vals[i] / mx * 30)}px"></span><span class="l">${MES[+m.slice(5) - 1][0].toUpperCase()}</span></button>`).join('');
+  // perfumaria 4: a ponta da barra dos meses que passaram da meta (líquido) vira brasa; a linha tracejada marca a meta
+  el.innerHTML = months.map((m, i) => { const fogo = !!meta && ags[i].l >= meta;
+    return `<button data-ym="${m}" aria-current="${m === route.ym}" data-tip="${MESL[+m.slice(5) - 1]} ${m.slice(0, 4)} · ${brl(vals[i])}${fogo ? ` · passou de ${brlK(meta)}` : ''}" aria-label="${MESL[+m.slice(5) - 1]} ${m.slice(0, 4)}" class="press"><span class="b${fogo ? ' fogo' : ''}" style="height:${Math.max(3, vals[i] / mx * 30)}px"></span><span class="l">${MES[+m.slice(5) - 1][0].toUpperCase()}</span></button>`; }).join('')
+    + (meta && meta <= mx ? `<span class="cine-meta" aria-hidden="true" style="bottom:${17 + meta / mx * 30}px"><span>${brlK(meta)}</span></span>` : '');
   months.forEach((m, i) => { if (m.endsWith('-01') && i > 0) { const b = el.children[i]; const s = document.createElement('span'); s.className = 'yr'; s.textContent = m.slice(0, 4); s.style.left = b.offsetLeft + 'px'; el.appendChild(s); } });
 }
 function goMonth(ym) {
@@ -467,8 +561,8 @@ function renderWL(scroll) {
   const l = wlList(); const by = new Map(); for (const e of l) { if (!by.has(e.data)) by.set(e.data, []); by.get(e.data).push(e); }
   const focusedId = document.activeElement && document.activeElement.closest && document.activeElement.closest('#wl .r') ? document.activeElement.dataset.id : null;
   $('#wl').innerHTML = l.length ? [...by.entries()].map(([d, es]) => {
-    const a = agg(es); const dt = dateOf(d);
-    return `<div class="day" role="presentation"><span class="d">${DOW[dt.getDay()]} <b>${d.slice(8)}</b> ${MES[dt.getMonth()]}</span><span class="t">${a.n} ex · <b>${brl(a.b)}</b></span></div>` +
+    const a = agg(es); const dt = dateOf(d), mil = !!metas().dia && a.b >= metas().dia;
+    return `<div class="day${mil ? ' mil' : ''}" role="presentation"><span class="d">${DOW[dt.getDay()]} <b>${d.slice(8)}</b> ${MES[dt.getMonth()]}</span><span class="t">${a.n} ex · ${mil ? ICON_CHAMA : ''}<b>${brl(a.b)}</b></span></div>` +
       es.map((e, i) => {
         const k = atKey(e), ps = partsOf(k), n = (entsByAt.get(k) || []).length;
         const grp = n > 1 ? ` ga${es[i - 1] && atKey(es[i - 1]) === k ? '' : ' ga-first'}${es[i + 1] && atKey(es[i + 1]) === k ? '' : ' ga-last'}` : '';
@@ -532,7 +626,7 @@ wireDop($('#dop'), m => goMonth(m));
 /* ============================================================
    TELA: ANO
    ============================================================ */
-function renderAno() {
+function renderAno({ anima = false } = {}) {
   const y = route.y, curY = new Date().getFullYear(); const minY = +minYM().slice(0, 4);
   $('#ytitle').innerHTML = `<span class="inner">${y}</span>`; $('#yprev').disabled = y <= minY; $('#ynext').disabled = y >= curY;
   $('#exp-ano').href = `/api/export.csv?de=${y}-01-01&ate=${y}-12-31&nome=ganhos-${y}`;
@@ -548,8 +642,9 @@ function renderAno() {
     <div><span class="eyebrow">Líquido</span><span class="v">${brl(a.l)}</span><small>taxas ${a.t ? '−' + brl(a.t) : '—'}</small></div>
     <div><span class="eyebrow">Exames</span><span class="v">${N0.format(a.n)}</span><small>${dl(a.n, p.n)} ${plural(a.at, 'atendimento')}</small></div>
     <div><span class="eyebrow">Média mensal</span><span class="v">${brl(ativos.length ? a.b / ativos.length : 0)}</span><small>${plural(ativos.length, 'mês com movimento', 'meses com movimento')}</small></div>
-    <div><span class="eyebrow">Melhor mês</span><span class="v">${best >= 0 ? MESL[best] : '—'}</span><small>${best >= 0 ? brl(ms[best].b) : ''}</small></div>`;
-  drawDop($('#dop2'), y); $('#lg-y2').textContent = y; $('#lg-p2').textContent = y - 1;
+    <div><span class="eyebrow">Melhor mês</span><span class="v">${best >= 0 ? (isCur && best === last && ativos.length > 1 ? `<span class="marca">${MESL[best]}</span>` : MESL[best]) : '—'}</span><small>${best >= 0 ? brl(ms[best].b) : ''}</small></div>`;
+  if (anima) correEspectro($('#dop2'), y); else drawDop($('#dop2'), y);
+  $('#lg-y2').textContent = y; $('#lg-p2').textContent = y - 1;
   const rows = ms.map((m, i) => {
     const pm = agg(ofM(`${y - 1}-${pad(i + 1)}`).filter(e => !(isCur && i === last) || e.data.slice(8) <= todayISO().slice(8)));
     return `<tr data-ym="${y}-${pad(i + 1)}" tabindex="0"><td>${MESL[i]}</td><td>${m.n || '<span class="dim">—</span>'}</td><td>${m.n ? brl(m.b) : '<span class="dim">—</span>'}</td><td class="dim">${m.t ? '−' + brl(m.t) : '—'}</td><td>${m.n ? brl(m.l) : '<span class="dim">—</span>'}</td><td>${m.b && pm.b ? dl(m.b, pm.b) : '<span class="dim">—</span>'}</td></tr>`;
@@ -596,6 +691,15 @@ async function loadMarco() {
   $('#marco-total').textContent = brl(m.total); $('#marco-de').textContent = `de ${brl(m.valor)}`;
   $('#marco-pct').textContent = N1.format(pct) + '%';
   requestAnimationFrame(() => { $('#marco-fill').style.width = pct + '%'; });
+  // perfumaria 7: um reflexo atravessa a barra a cada abertura; batida, ela vira brasa
+  // e as chamas correm por cima (uma vez por meta, neste navegador)
+  const fill = $('#marco-fill'), batida = m.total >= m.valor, comFogo = !!(metas().dia || metas().mes);
+  fill.classList.toggle('batida', batida && comFogo);
+  fill.classList.remove('brilha'); void fill.offsetWidth; if (pct > 0 && !(batida && comFogo)) fill.classList.add('brilha');
+  if (batida && comFogo) {
+    let visto = false; try { visto = localStorage.getItem('marcoAceso') === String(m.valor); } catch (e) { /* sem storage */ }
+    if (!visto) { try { localStorage.setItem('marcoAceso', String(m.valor)); } catch (e) { /* sem storage */ } setTimeout(acendeMarco, reduce ? 0 : 1100); }
+  }
   $('#marco-partes').innerHTML = m.partes.map(p => `<span>${esc(p.dono)} <b>${brl(p.bruto)}</b> <span class="dim">· ${N0.format(p.exames)} exames</span></span>`).join('');
   const st = [];
   if (m.enviado) st.push(`<li class="ok">🎉 Meta batida! E-mail enviado em ${m.enviado.slice(0, 10).split('-').reverse().join('/')}.</li>`);
@@ -717,7 +821,8 @@ function addRow({ ex = '', vl = '', id = '', focus = true } = {}) {
   });
   if (focus) exI.focus();
 }
-combobox($('#f-med'), () => freq('medico').map(m => ({ label: m })), () => focusPay());
+combobox($('#f-med'), () => freq('medico').map(m => ({ label: m })), () => { updateTotals(); focusPay(); });
+$('#f-data').addEventListener('input', () => updateTotals());
 $('#f-med').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey && $('#f-med').getAttribute('aria-expanded') !== 'true') { e.preventDefault(); focusPay(); } });
 function sheetRows() { return $$('#f-rows .exrow').map(d => ({ d, id: d.dataset.id || '', ex: d.querySelector('[name=ex]').value.trim(), vl: parseMoney(d.querySelector('[name=vl]').value) })); }
 
@@ -880,6 +985,34 @@ function updateTotals() {
   else if (rest < 0) st.innerHTML = `<span class="bad">Os valores passam do total em ${brl(-rest)}.</span>`;
   else if (rest === 0 && bruto > 0) st.innerHTML = '<span class="bad">A última forma ficou sem valor: ajuste os valores ou remova uma forma.</span>';
   else st.innerHTML = `<span class="ok">✓</span> Dividido em ${parts.length} formas · ${vals.map(brl).join(' + ')} = ${brl(bruto)}`;
+  $('#f-save').classList.toggle('pronta', !conferirFolha().erro);   // perfumaria 10: a luz corre a borda quando dá para salvar
+}
+// o que impede salvar a folha. O envio e a luz do Salvar leem a MESMA resposta: se um mudar sem o outro,
+// a luz acende numa folha que o servidor recusa (ou fica apagada numa que ele aceita)
+function conferirFolha() {
+  const rs = sheetRows().filter(r => r.ex || r.vl), med = $('#f-med').value.trim(), day = $('#f-data').value;
+  const erro = (m, el) => ({ erro: { m, el } });
+  if (!day) return erro('Informe a data.', $('#f-data'));
+  if (day > todayISO()) return erro('A data não pode ser no futuro.', $('#f-data'));
+  if (!rs.length) return erro('Informe ao menos um exame.', $('#f-rows [name=ex]'));
+  for (const r of rs) {
+    if (!r.ex) return erro('Falta o nome do exame.', r.d.querySelector('[name=ex]'));
+    if (!(r.vl > 0)) return erro(`Valor inválido para "${r.ex}".`, r.d.querySelector('[name=vl]'));
+  }
+  if (!med) return erro('Informe o médico solicitante.', $('#f-med'));
+  const edit = sheet.mode === 'edit';
+  const bruto = r2(rs.reduce((s, r) => s + r.vl, 0)), vals = partValues(bruto);
+  // lançamento antigo sem forma de pagamento pode continuar "não informado"
+  const semPag = edit && parts.length === 1 && !parts[0].forma && !(paysByAt.get(sheet.key) || []).length;
+  if (!semPag) {
+    for (const [i, p] of parts.entries()) {
+      const qual = parts.length > 1 ? ` da forma ${i + 1}` : '';
+      if (!p.forma) return erro(`Escolha a forma de pagamento${qual}.`, $('.pp-forma', p.el));
+      if ((p.forma === 'debito' || p.forma === 'credito') && !p.maquina && !p.fixa) return erro(`Escolha a maquininha${qual}.`, $('.pp-maq', p.el));
+      if (parts.length > 1 && !(vals[i] > 0)) return erro(i === parts.length - 1 ? 'A última forma ficou sem valor: ajuste os valores ou remova uma forma.' : `Informe o valor pago na forma ${i + 1}.`, $('.pp-val input', (i === parts.length - 1 ? parts[i - 1] : p).el));
+    }
+  }
+  return { rs, med, day, vals, semPag };
 }
 function snapshotAt(key) {
   const es = (entsByAt.get(key) || []).slice().sort((a, b) => a.created_at - b.created_at);
@@ -947,28 +1080,9 @@ form.addEventListener('keydown', e => {
 })();
 form.addEventListener('submit', async e => {
   e.preventDefault(); const err = $('#ferr'); err.textContent = '';
-  const rs = sheetRows().filter(r => r.ex || r.vl), med = $('#f-med').value.trim(), day = $('#f-data').value;
   const fail = (m, el) => { err.textContent = m; if (el) { el.classList.add('err'); const f = el.matches('input,button') ? el : el.querySelector('[tabindex="0"]') || el.querySelector('button'); if (f) f.focus(); if (!reduce) el.animate([{ transform: 'translateX(0)' }, { transform: 'translateX(-5px)' }, { transform: 'translateX(4px)' }, { transform: 'translateX(-2px)' }, { transform: 'translateX(0)' }], { duration: 260, easing: 'ease-out' }); } };
-  if (!day) return fail('Informe a data.', $('#f-data'));
-  if (day > todayISO()) return fail('A data não pode ser no futuro.', $('#f-data'));
-  if (!rs.length) return fail('Informe ao menos um exame.', $('#f-rows [name=ex]'));
-  for (const r of rs) {
-    if (!r.ex) return fail('Falta o nome do exame.', r.d.querySelector('[name=ex]'));
-    if (!(r.vl > 0)) return fail(`Valor inválido para "${r.ex}".`, r.d.querySelector('[name=vl]'));
-  }
-  if (!med) return fail('Informe o médico solicitante.', $('#f-med'));
-  const edit = sheet.mode === 'edit';
-  const bruto = r2(rs.reduce((s, r) => s + r.vl, 0)), vals = partValues(bruto);
-  // lançamento antigo sem forma de pagamento pode continuar "não informado"
-  const semPag = edit && parts.length === 1 && !parts[0].forma && !(paysByAt.get(sheet.key) || []).length;
-  if (!semPag) {
-    for (const [i, p] of parts.entries()) {
-      const qual = parts.length > 1 ? ` da forma ${i + 1}` : '';
-      if (!p.forma) return fail(`Escolha a forma de pagamento${qual}.`, $('.pp-forma', p.el));
-      if ((p.forma === 'debito' || p.forma === 'credito') && !p.maquina && !p.fixa) return fail(`Escolha a maquininha${qual}.`, $('.pp-maq', p.el));
-      if (parts.length > 1 && !(vals[i] > 0)) return fail(i === parts.length - 1 ? 'A última forma ficou sem valor: ajuste os valores ou remova uma forma.' : `Informe o valor pago na forma ${i + 1}.`, $('.pp-val input', (i === parts.length - 1 ? parts[i - 1] : p).el));
-    }
-  }
+  const f = conferirFolha(); if (f.erro) return fail(f.erro.m, f.erro.el);
+  const { rs, med, day, vals, semPag } = f, edit = sheet.mode === 'edit';
   const pagamentos = semPag ? [] : parts.map((p, i) => ({ forma: p.forma, maquina: CARTOES.includes(p.forma) ? (p.maquina || null) : null,
     parcelas: p.forma === 'credito' ? (p.parcelas || 1) : null, valor: vals[i], taxa: taxaPara(p) }));
   const body = { data: day, medico: med, exames: rs.map(r => ({ id: r.id || undefined, exame: r.ex, valor: r2(r.vl) })), pagamentos };
@@ -1029,6 +1143,214 @@ async function deleteAtendimento(key) {
 function refresh() { if (route.page === 'mes') renderMes(0, { sweepIt: false }); else if (route.page === 'ano') renderAno(); }
 
 /* ============================================================
+   PERFUMARIA (11/10/2026): fogo nos marcos e acabamento nos cantos.
+   As metas vêm do site.config.json ("metas": { dia, mes }): dia pelo BRUTO (o número do
+   cabeçalho do dia e da profundidade do setor), mês pelo LÍQUIDO (o número grande).
+   O estouro (brasas, chamas, holofotes) acontece UMA vez, no lançamento que cruza a marca;
+   no resto do tempo a tela só mostra o estado, recalculado dos dados. Cair abaixo da marca
+   (editar, excluir, desfazer) apaga na hora. Sem metas, nada disso aparece.
+   O fogo é desenhado por fogo.js (window.Fogo); sem ele, os estados aparecem sem chama.
+   ============================================================ */
+const ICON_CHAMA = '<svg class="ico-chama" viewBox="0 0 12 16" aria-hidden="true"><path d="M6 .8c.6 2.6 4 4.4 4 8.8 0 3.3-1.8 5.6-4 5.6s-4-2.3-4-5c0-2.3 1.3-3.6 2.2-5 .3 1.6.9 2.5 1.8 2.8C6.6 6.1 6.1 3.4 6 .8z" fill="currentColor"/></svg>';
+const FOGO = window.Fogo || null;
+const laco = FOGO && FOGO.criaLaco();
+const brasas = FOGO && FOGO.criaBrasas($('#brasas'), laco);
+// fora da tela (ou numa aba escondida), as chamas não pedem quadro
+function vigia(el, alvo) { new IntersectionObserver(es => { alvo.vis = es[0].isIntersecting; if (alvo.vis && laco) laco.acorda(); }, { rootMargin: '120px' }).observe(el); }
+
+/* ---------- marcos: o que mudou desde a última leitura dos dados ---------- */
+let fotoAnt = null, pendentes = null, adia = null, marcaDesde = -1e9, diaDoRelogio = todayISO();
+function fotoMarcos() {
+  const hoje = todayISO(), ym = curYM(), mesL = new Map(), dias = new Map();
+  for (const e of entries) {
+    const m = e.data.slice(0, 7); mesL.set(m, (mesL.get(m) || 0) + liq(e));
+    if (m === ym) dias.set(e.data, (dias.get(e.data) || 0) + e.valor);
+  }
+  for (const [k, x] of mesL) mesL.set(k, r2(x));
+  const hojeB = r2(dias.get(hoje) || 0);
+  // mesmo critério do "Melhor dia" da tela: o primeiro maior valor; hoje só ganha se passar todos
+  let melhorHoje = hojeB > 0 && dias.size > 1; for (const [d, b] of dias) if (d !== hoje && b >= hojeB) { melhorHoje = false; break; }
+  return { hoje, hojeB, mesL, melhorHoje };
+}
+// melhor mês da história = maior líquido entre todos os meses (exige ao menos 3 outros meses com movimento)
+function maiorOutro(mesL, ym) { let max = 0, qual = null, n = 0; for (const [k, x] of mesL) if (k !== ym && x > 0) { n++; if (x > max) { max = x; qual = k; } } return { max, qual, n }; }
+function recordeEm(mesL, ym) { const o = maiorOutro(mesL, ym); return o.n >= 3 && (mesL.get(ym) || 0) > o.max; }
+function confereMarcos() {
+  const f = fotoMarcos(), a = fotoAnt; fotoAnt = f;
+  const m = metas(), ev = {};
+  if (a) {
+    if (m.dia && a.hoje === f.hoje && a.hojeB < m.dia && f.hojeB >= m.dia) ev.dia = f.hojeB;
+    if (m.mes) for (const [ym, l] of f.mesL) {
+      const antes = a.mesL.get(ym) || 0; if (l <= antes) continue;
+      if (antes < m.mes && l >= m.mes) ev.mes = ym;
+      if (recordeEm(f.mesL, ym) && !recordeEm(a.mesL, ym)) ev.recorde = ym;
+    }
+    if (f.melhorHoje && !a.melhorHoje && a.hoje === f.hoje) marcaDesde = performance.now();
+  }
+  if (!ev.dia) atualizaBotao();   // o botão segue o dado (no estouro, acende junto com as brasas)
+  if (ev.mes || ev.recorde) adia = { ym: ev.mes || ev.recorde, ate: performance.now() + 1500 };   // a brasa espera o número rolar
+  if (ev.dia || ev.mes || ev.recorde) { pendentes = ev; requestAnimationFrame(() => requestAnimationFrame(estouros)); }
+}
+const vale = (ym, alvo) => (fotoAnt && (fotoAnt.mesL.get(ym) || 0) >= alvo);
+function estouros() {
+  const ev = pendentes; pendentes = null; if (!ev) return;
+  const m = metas(), naTela = ym => !!ym && route.page === 'mes' && route.ym === ym && !$('#app').hidden;
+  const depois = (ms, fn) => setTimeout(fn, reduce ? 0 : ms);
+  if (!naTela(ev.mes) && !naTela(ev.recorde)) adia = null;
+  if (ev.dia) {   // o setor cruza o arco em ~0,4 s; o fogo corre dali para o botão
+    depois(650, () => atualizaBotao({ estouro: true }));
+    depois(900, () => { if (fotoAnt.hojeB >= m.dia) toast(`Hoje passou de ${brlK(m.dia)}`, `${brl(fotoAnt.hojeB)} de bruto`, null, { fogo: true }); });
+  }
+  const nome = ym => `${MESL[+ym.slice(5) - 1]}${ym.slice(0, 4) === curYM().slice(0, 4) ? '' : ' de ' + ym.slice(0, 4)}`;
+  if (ev.mes) {
+    depois(780, () => { if (naTela(ev.mes)) { adia = null; refresh(); if (vale(ev.mes, m.mes)) { const c = $('[data-reacende]'); if (c) c.classList.add('novo'); chamasNoNumero(); } } });
+    depois(1000, () => { if (vale(ev.mes, m.mes)) toast(`${nome(ev.mes)} passou de ${brlK(m.mes)}`, `líquido ${brl(fotoAnt.mesL.get(ev.mes))}`, null, { fogo: true }); });
+  }
+  if (ev.recorde) {
+    const o = maiorOutro(fotoAnt.mesL, ev.recorde);
+    depois(ev.mes ? 2000 : 780, () => { if (naTela(ev.recorde)) { adia = null; refresh(); if (recordeEm(fotoAnt.mesL, ev.recorde)) acendeHolofotes(); } });
+    depois(ev.mes ? 2200 : 1000, () => { if (recordeEm(fotoAnt.mesL, ev.recorde)) toast(`${nome(ev.recorde)}: melhor mês da história`, `líquido ${brl(fotoAnt.mesL.get(ev.recorde))}${o.qual ? ` · passou ${MESL[+o.qual.slice(5) - 1].toLowerCase()} de ${o.qual.slice(0, 4)} (${brl(o.max)})` : ''}`, null, { fogo: true }); });
+  }
+}
+
+/* ---------- 1: o Lançar pega fogo no dia de R$ 1 mil (até a meia-noite) ---------- */
+const bLancar = $('#open-sheet'), fogoBotao = { on: false, lit: 0, imp: 0, vis: true, fioT: 0, cv: $('#open-sheet .soq canvas') };
+const pontaBotao = () => { const r = $('#open-sheet .soq').getBoundingClientRect(); return [r.left + r.width / 2, r.top - 2]; };
+function brutoDoDia(d) { let b = 0; for (const e of entries) if (e.data === d) b += e.valor; return r2(b); }
+function atualizaBotao({ estouro = false } = {}) {
+  const meta = metas().dia, v = !!meta && brutoDoDia(todayISO()) >= meta;
+  if (v === fogoBotao.on && !(v && estouro)) return;
+  const era = fogoBotao.on; fogoBotao.on = v; bLancar.classList.toggle('acesa', v);
+  if (!laco || $('#app').hidden) return;
+  const [px, py] = pontaBotao();
+  if (v && estouro) { fogoBotao.imp = 1; brasas.rajada(px, py, 1.4); if (!reduce) { bLancar.classList.remove('treme'); void bLancar.offsetWidth; bLancar.classList.add('treme'); } }
+  else if (era && !v) brasas.fumaca(px, py);
+  laco.acorda();
+}
+if (laco) {
+  vigia(bLancar, fogoBotao);
+  laco.registra((dt, t) => {
+    const f = fogoBotao;
+    f.lit = reduce ? +f.on : FOGO.suave(f.lit, f.on ? 1 : 0, dt, .22);
+    f.imp *= Math.exp(-2.2 * dt);
+    const mudando = Math.abs(f.lit - (f.on ? 1 : 0)) > .003 || f.imp > .01;
+    if (!f.vis) return false;
+    const d = FOGO.DPR(), W = Math.round(52 * d), H = Math.round(88 * d), ctx = f.cv.getContext('2d');
+    if (f.cv.width !== W || f.cv.height !== H) { f.cv.width = W; f.cv.height = H; }
+    ctx.setTransform(d, 0, 0, d, 0, 0); ctx.clearRect(0, 0, 52, 88);
+    if (f.lit > .01) FOGO.chama(ctx, 26, 74, 20, { seed: 11.3, t: reduce ? 0 : t, lit: f.lit, boost: f.imp, desfoque: false, taxa: reduce ? 0 : 70 });
+    if (f.on && !reduce) { f.fioT += dt; if (f.fioT > .2) { f.fioT = 0; if (Math.random() < .3) { const [px, py] = pontaBotao(); brasas.fio(px, py); } } }
+    return reduce ? mudando : (f.lit > .01 || mudando);
+  });
+}
+
+/* ---------- 2: a chama na ponta da linha de hoje, no setor ---------- */
+const fanFogo = $('#fan-fogo'), fogoFan = { lit: 0, vis: true };
+if (laco) {
+  vigia(fan.parentElement, fogoFan);
+  laco.registra((dt, t) => {
+    const meta = metas().dia, g = geo, i = new Date().getDate() - 1;
+    const on = !!meta && route.page === 'mes' && !!g && g.ym === curYM() && sweep >= 1 && (g.v[i] || 0) >= meta;
+    fogoFan.lit = reduce ? +on : FOGO.suave(fogoFan.lit, on ? 1 : 0, dt, .25);
+    const mudando = Math.abs(fogoFan.lit - (on ? 1 : 0)) > .003;
+    if (!fogoFan.vis) return false;
+    const { x, w, h } = fit(fanFogo); x.clearRect(0, 0, w, h);
+    if (fogoFan.lit > .01 && g) {
+      const a = g.a0 + (i + .5) * g.slot, r = g.rv(g.v[i] || 0);
+      FOGO.chama(x, g.ax + r * Math.sin(a), g.ay + r * Math.cos(a) + 3, 15, { seed: 4.2, t: reduce ? 0 : t, lit: fogoFan.lit, desfoque: false, taxa: reduce ? 0 : 45 });
+    }
+    return reduce ? mudando : (fogoFan.lit > .01 || mudando);
+  });
+}
+
+/* ---------- 3: o líquido do mês em chamas; depois, em brasa ---------- */
+const heroCv = $('#hero-chama'), fogoHero = { on: false, lit: 0, vis: true, letras: [], timer: 0 };
+function medeHero() {
+  const c = heroCv.getBoundingClientRect();
+  fogoHero.letras = $$('#hero .dg').map((s, i) => { const r = s.getBoundingClientRect(); return { cx: r.left - c.left + r.width / 2, topo: r.top - c.top, w: r.width, h: r.height, seed: i * 13.7 + 3 }; });
+}
+if (laco) {
+  vigia(heroCv.parentElement, fogoHero);
+  laco.registra((dt, t) => {
+    const f = fogoHero;
+    f.lit = FOGO.suave(f.lit, f.on ? 1 : 0, dt, reduce ? .05 : .35);
+    const mudando = Math.abs(f.lit - (f.on ? 1 : 0)) > .003;
+    if (!f.vis) return false;
+    const { x, w, h } = fit(heroCv); x.clearRect(0, 0, w, h);
+    if (f.lit > .01) for (const l of f.letras) FOGO.chama(x, l.cx, l.topo + l.h * .3, l.w * .8, { seed: l.seed, t: reduce ? 0 : t, lit: f.lit, desfoque: false, taxa: reduce ? 0 : 34 });
+    return reduce ? mudando : (f.lit > .01 || mudando);
+  });
+}
+function chamasNoNumero({ estouro = true } = {}) {
+  if (!laco) return;
+  medeHero(); fogoHero.on = true;
+  if (estouro) { const r = $('#hero').getBoundingClientRect(); brasas.rajada(r.left + r.width * .3, r.top, 1.2); brasas.rajada(r.left + r.width * .75, r.top, 1); }
+  clearTimeout(fogoHero.timer); fogoHero.timer = setTimeout(() => { fogoHero.on = false; laco.acorda(); }, 4200);
+  laco.acorda();
+}
+function apagaNumero() { clearTimeout(fogoHero.timer); fogoHero.on = false; if (laco) laco.acorda(); }
+const segurando = ym => !!adia && adia.ym === ym && performance.now() < adia.ate;
+function pintaHero(ym, l) {
+  const meta = metas().mes, brasa = !!meta && l >= meta;
+  $('#hero').parentElement.classList.toggle('em-brasa', brasa && !segurando(ym));
+  if (!brasa) apagaNumero();
+}
+function chipsDoMes(ym, l) {
+  const meta = metas().mes; if (!meta || segurando(ym)) return '';
+  let s = '';
+  if (l >= meta) s += `<button type="button" class="marco-chip press" data-reacende aria-label="Mês acima de ${brlK(meta)}. Toque para acender de novo.">${ICON_CHAMA}${brlK(meta)} no mês</button>`;
+  if (fotoAnt && recordeEm(fotoAnt.mesL, ym)) s += '<span class="marco-chip recorde">melhor mês da história</span>';
+  return s;
+}
+$('#herosub').addEventListener('click', e => { if (e.target.closest('[data-reacende]')) chamasNoNumero(); });
+
+/* ---------- 9: holofotes no melhor mês da história ---------- */
+let holoT = 0;
+function acendeHolofotes() {
+  const rep = $('.report'), hero = $('#hero').parentElement;
+  clearTimeout(holoT); rep.classList.remove('holo'); void rep.offsetWidth; rep.classList.add('holo'); hero.classList.add('holo');
+  if (brasas) { const r = $('#hero').getBoundingClientRect(); brasas.rajada(r.left + r.width / 2, r.top, .5); }
+  holoT = setTimeout(() => { rep.classList.remove('holo'); hero.classList.remove('holo'); }, 5200);
+}
+
+/* ---------- 7: a meta conjunta acesa (fileira de chamas sobre a barra) ---------- */
+const marcoCv = $('#marco-chama'), fogoMarco = { on: false, lit: 0, vis: true, timer: 0 };
+if (laco) {
+  vigia(marcoCv, fogoMarco);
+  laco.registra((dt, t) => {
+    const f = fogoMarco;
+    f.lit = FOGO.suave(f.lit, f.on ? 1 : 0, dt, reduce ? .05 : .3);
+    const mudando = Math.abs(f.lit - (f.on ? 1 : 0)) > .003;
+    if (!f.vis) return false;
+    const { x, w, h } = fit(marcoCv); x.clearRect(0, 0, w, h);
+    if (f.lit > .01) { const n = Math.max(6, Math.round(w / 26)); for (let i = 0; i < n; i++) FOGO.chama(x, (i + .5) * w / n, h - 2, 11 + 4 * hash(i + 1), { seed: i * 7.1, t: reduce ? 0 : t, lit: f.lit, desfoque: false, taxa: reduce ? 0 : 26 }); }
+    return reduce ? mudando : (f.lit > .01 || mudando);
+  });
+}
+function acendeMarco() {
+  if (!laco || route.page !== 'ajustes') return;
+  fogoMarco.on = true;
+  const r = marcoCv.getBoundingClientRect(); brasas.rajada(r.left + r.width * .25, r.bottom, 1); brasas.rajada(r.left + r.width * .75, r.bottom, 1);
+  clearTimeout(fogoMarco.timer); fogoMarco.timer = setTimeout(() => { fogoMarco.on = false; laco.acorda(); }, 5000);
+  laco.acorda();
+}
+
+/* ---------- 11: exportar responde (o download segue normal; o rótulo vira "Baixado" por 2 s) ---------- */
+document.addEventListener('click', e => {
+  const b = e.target.closest && e.target.closest('.exp'); if (!b) return;
+  b.classList.remove('feito'); void b.offsetWidth; b.classList.add('feito');
+  clearTimeout(b._t); b._t = setTimeout(() => b.classList.remove('feito'), 2200);
+});
+
+/* ---------- 12: o nome do login sobe letra por letra (o texto inteiro fica para o leitor de tela) ---------- */
+function nomeQueSobe() {
+  const h = $('.login h1'), t = cfg.dono || cfg.nome || '';
+  h.innerHTML = `<span class="sr">${esc(t)}</span>` + [...t].map((c, i) => c === ' ' ? ' ' : `<span class="l" aria-hidden="true" style="--n:${i}"><span>${esc(c)}</span></span>`).join('');
+  h.classList.remove('sobe'); if (!reduce) { void h.offsetWidth; h.classList.add('sobe'); }
+}
+
+
+/* ============================================================
    TOASTS — pilha com profundidade, pausa no hover/aba oculta,
    arrastar para o lado dispensa (Sonner)
    ============================================================ */
@@ -1042,11 +1364,11 @@ function layoutToasts() {
     el.style.zIndex = 100 - i; el.style.pointerEvents = i > 2 && !expanded ? 'none' : '';
   });
 }
-function toast(msg, sub, action, { error = false, label = 'Desfazer' } = {}) {
-  const el = document.createElement('li'); el.className = 'toast' + (error ? ' err' : '');
-  el.innerHTML = `<span class="dot"></span><span class="msg">${esc(msg)}${sub ? `<small>${esc(sub)}</small>` : ''}</span>${action ? `<button class="act press">${esc(label)}</button>` : ''}`;
+function toast(msg, sub, action, { error = false, label = 'Desfazer', fogo = false } = {}) {
+  const el = document.createElement('li'); el.className = 'toast' + (error ? ' err' : '') + (fogo ? ' fogo' : '');
+  el.innerHTML = `${fogo ? ICON_CHAMA.replace('ico-chama', 'dot') : '<span class="dot"></span>'}<span class="msg">${esc(msg)}${sub ? `<small>${esc(sub)}</small>` : ''}</span>${action ? `<button class="act press">${esc(label)}</button>` : ''}`;
   tbox.prepend(el);
-  const t = { el, left: action ? 7000 : 3500, start: 0, timer: 0 }; toasts.unshift(t);
+  const t = { el, left: action ? 7000 : fogo ? 5200 : 3500, start: 0, timer: 0 }; toasts.unshift(t);
   const kill = () => { clearTimeout(t.timer); if (!toasts.includes(t)) return; toasts = toasts.filter(x => x !== t); el.style.opacity = 0; el.style.transform += ' translateY(12px)'; setTimeout(() => el.remove(), 320); layoutToasts(); };
   t.kill = kill; t.pause = () => { clearTimeout(t.timer); t.left -= performance.now() - t.start; }; t.resume = () => { t.start = performance.now(); t.timer = setTimeout(kill, Math.max(800, t.left)); };
   if (action) el.querySelector('.act').addEventListener('click', async () => {
@@ -1110,7 +1432,7 @@ function applyRoute() {
   }
   hideTip();
   if (route.page === 'mes') renderMes(changed ? 0 : Math.sign((route.ym > prev.ym) - (route.ym < prev.ym)), { sweepIt: changed || prev.ym !== route.ym });
-  else if (route.page === 'ano') renderAno();
+  else if (route.page === 'ano') renderAno({ anima: changed || prev.y !== route.y });
   else renderAjustes();
   if (changed) scrollTo({ top: 0 });
 }
@@ -1130,6 +1452,7 @@ function drawLoginFan(p) {
 }
 function showLogin() {
   $('#app').hidden = true; closeSheet(); $('#login').hidden = false;
+  $('.login').classList.remove('checando', 'errou', 'entrou'); nomeQueSobe();
   const pw = $('#login-pw'); pw.value = ''; setTimeout(() => pw.focus(), 60);
   if (reduce) { drawLoginFan(1); return; }
   const t0 = performance.now(); const step = now => { const p = Math.min(1, easeOut((now - t0) / 1400)); drawLoginFan(p); if (p < 1 && !$('#login').hidden) requestAnimationFrame(step); }; requestAnimationFrame(step);
@@ -1144,8 +1467,10 @@ $('#login-form').addEventListener('submit', async ev => {
   const pw = $('#login-pw'), err = $('#login-err'), btn = $('.login-go'), box = $('.login-field');
   if (!pw.value) { pw.focus(); return; }
   btn.disabled = true; err.textContent = '';
+  const lg = $('.login'); lg.classList.remove('errou', 'entrou'); lg.classList.add('checando');   // o transdutor pulsa enquanto confere
   try {
     await api('POST', '/api/login', { password: pw.value });
+    lg.classList.replace('checando', 'entrou');
     await loadAll();
     if (!reduce) await $('.login').animate([{ opacity: 1, transform: 'none' }, { opacity: 0, transform: 'scale(.98)' }], { duration: 180, easing: 'ease-in' }).finished;
     showApp();
@@ -1154,11 +1479,15 @@ $('#login-form').addEventListener('submit', async ev => {
     else if (e.status === 401) err.textContent = e.data && e.data.restantes <= 2 ? `Senha incorreta · restam ${e.data.restantes} tentativa(s)` : 'Senha incorreta';
     else err.textContent = e.message;
     box.classList.remove('shake'); void box.offsetWidth; box.classList.add('shake');
+    lg.classList.remove('checando'); lg.classList.add('errou'); setTimeout(() => lg.classList.remove('errou'), 1200);
     pw.select();
   } finally { btn.disabled = false; }
 });
 
-function tick() { const d = new Date(); $('#clock').textContent = `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`; }
+function tick() {
+  const d = new Date(); $('#clock').textContent = `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  if (todayISO() !== diaDoRelogio) { diaDoRelogio = todayISO(); fotoAnt = fotoMarcos(); atualizaBotao(); }   // meia-noite: o fogo do dia apaga
+}
 let rz; addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => {
   if (!$('#login').hidden) drawLoginFan(1);
   slide($('.tabs'), '[aria-selected="true"]'); slide($('#rk-seg'), '[aria-pressed="true"]'); if (!ov.hidden) parts.forEach(p => paintPart(p));
