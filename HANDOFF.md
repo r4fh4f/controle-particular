@@ -15,11 +15,16 @@ Existem **dois sites com o mesmo código**, cada um com seu banco e sua senha:
 ## Mantendo os dois sites iguais
 
 O código é **idêntico** nos dois repositórios. A única diferença é o arquivo
-`site.config.json` (dono, cores):
+`site.config.json` (dono, cores e, opcionalmente, as metas):
 
 ```json
-{ "nome": "...", "dono": "Rafael", "inicial": "R", "accent": [0.82, 0.14, 75], "accent2": [0.68, 0.16, 255] }
+{ "nome": "...", "dono": "Rafael", "inicial": "R", "accent": [0.82, 0.14, 75], "accent2": [0.68, 0.16, 255],
+  "metas": { "dia": 1000, "mes": 10000 } }
 ```
+
+> **Exceção temporária (11/10/2026):** a perfumaria (seção abaixo) entrou só neste repositório.
+> O da Fernanda continua na versão anterior até ela decidir. Ao levar, copie o código e
+> **não** as metas: sem `metas`, o site dela fica sem fogo e sem holofotes.
 
 `accent` é a cor de destaque do site (calipers, cursor, mês aberto) e `accent2` a da etiqueta de
 mamografia, em OKLCH (luminosidade, croma, matiz). Ao mudar algo, aplique a mesma mudança nos dois repositórios
@@ -31,6 +36,36 @@ Tema "Sonda": o painel é desenhado como um console de ultrassom, sempre escuro.
 O mês aparece como um **setor de varredura** (cada linha = um dia, profundidade = ganho bruto,
 marcador de foco = média por dia trabalhado) e o ano como um **espectro Doppler**
 (ano atual acima da linha de base, ano anterior espelhado abaixo).
+
+### Perfumaria (11/10/2026)
+
+Efeitos tirados das receitas da skill de perfumaria. O fogo é desenhado por `public/fogo.js`
+(canvas, sem biblioteca). Os estilos ficam no bloco PERFUMARIA de `styles.css`, e a lógica
+na seção PERFUMARIA de `app.js`.
+
+**Metas** (`site.config.json` → `metas`; vão ao navegador por `/api/settings`, que exige login):
+o **dia** conta pelo **bruto** (o número do cabeçalho do dia e da profundidade do setor) e o
+**mês** pelo **líquido** (o número grande). Sem `metas`, nada de fogo nem de holofotes.
+
+| Quando | O que acontece |
+|---|---|
+| dia ≥ meta do dia | o **Lançar** pega fogo (até a meia-noite); no setor, o trecho da linha além do arco tracejado fica em brasa, e a linha de hoje tem uma chama na ponta; o total do dia fica âmbar |
+| mês ≥ meta do mês | o líquido pega fogo dígito por dígito e depois fica em brasa, com a etiqueta "R$ 10 mil no mês" (tocar acende de novo); a barra do mês no topo vira brasa |
+| mês passa o melhor mês da história | holofotes por 5 s e o selo "melhor mês da história" (exige 3 meses de histórico) |
+| meta conjunta batida | a barra vira brasa e as chamas correm por cima (uma vez por navegador) |
+| todo lançamento, edição ou exclusão | a linha do dia cresce até o valor novo e pulsa na ponta |
+| hoje vira o melhor dia do mês | marca-texto e "recorde" em "Melhor dia" |
+| folha completa | o Salvar acende com uma luz correndo a borda (`conferirFolha` decide para o envio e para a luz) |
+| abrir a tela Ano | o espectro corre atrás de uma linha de varredura |
+| exportar | o botão enche no hover e troca para "Baixado" no clique |
+| login | o nome sobe letra por letra; o transdutor pulsa enquanto o servidor confere a senha |
+| abrir um mês à frente do anterior | uma passada de luz na etiqueta verde |
+
+O **estouro** (brasas, chamas, holofotes, avisos) acontece **uma vez**, no lançamento que
+cruza a marca. Depois a tela só mostra o estado, recalculado dos dados: abrir o site mais
+tarde mostra o fogo aceso, sem estouro, e **cair abaixo da marca apaga na hora**. Com
+"reduzir movimento" no aparelho, tudo aparece parado. As chamas param fora da tela e com a
+aba escondida.
 
 ## Telas
 
