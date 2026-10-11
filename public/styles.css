@@ -576,6 +576,7 @@ body.sheet-open #app{transform:scale(.985);filter:brightness(.42) saturate(.6)}
   .top{gap:10px;padding-bottom:10px}
   .tabs{order:3;width:100%;margin-left:0}
   .mark .full{display:none}
+  .ann.tr{display:none}   /* no celular as anotações dos dois cantos se sobrepunham; bruto, taxas e líquido estão no laudo logo abaixo */
 }
 @media (prefers-reduced-motion:reduce){
   *,*::before,*::after{transition-duration:0s!important;animation-duration:0s!important;animation-delay:0s!important}
